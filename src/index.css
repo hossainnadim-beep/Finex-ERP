@@ -1,1 +1,352 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 @import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: #f4f5f8;
+  color: #0c111d;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Redefine global workspace containers: Light slate background and dark charcoal text */
+#root .min-h-screen:not(#supabase-auth-screen) {
+  background-color: #f4f5f8 !important;
+  color: #0f172a !important;
+}
+
+main {
+  background-color: #f4f5f8 !important;
+  color: #0f172a !important;
+}
+
+/* Ensure desktop and mobile sidebars are beautiful deep navy/slate, identical to premium QuickBooks & Xero workspaces */
+aside,
+header.md\:hidden,
+div.md\:hidden {
+  background-color: #0c1626 !important; /* Deep Navy */
+  border-color: #1e293b !important;
+}
+
+aside span.text-zinc-100,
+aside span.text-zinc-300,
+aside button,
+header.md\:hidden span {
+  color: #f8fafc !important;
+}
+
+aside .text-zinc-500,
+aside .text-zinc-550 {
+  color: #94a3b8 !important;
+}
+
+aside .border-zinc-850,
+aside .border-zinc-800 {
+  border-color: #1e293b !important;
+}
+
+aside button:not(#desk-signout-btn) {
+  background-color: transparent !important;
+}
+
+aside button:not(#desk-signout-btn):hover {
+  background-color: rgba(255, 255, 255, 0.05) !important;
+}
+
+/* Highlight active menu item with Xero Brand Blue or custom active tab styling */
+aside button[class*="text-blue-400"],
+aside button[class*="bg-zinc-800"] {
+  background-color: rgba(0, 124, 189, 0.15) !important;
+  color: #38bdf8 !important;
+  border-left: 3px solid #00b7f1 !important;
+  font-weight: 600 !important;
+}
+
+/* 1. White & crisp QuickBooks Card Design */
+:not(aside):not(#supabase-auth-screen) .bg-\[\#121214\] {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+  border-color: #e2e8f0 !important;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05), 0 1px 2px 0 rgba(0, 0, 0, 0.03) !important;
+  border-radius: 0.5rem !important;
+}
+
+/* Map alternate inputs / nested layers in the workspace */
+:not(aside):not(#supabase-auth-screen) .bg-zinc-900,
+:not(aside):not(#supabase-auth-screen) .bg-zinc-950,
+:not(aside):not(#supabase-auth-screen) .bg-zinc-900\/50,
+:not(aside):not(#supabase-auth-screen) .bg-\[\#09090b\] {
+  background-color: #f8fafc !important;
+  color: #0f172a !important;
+  border-color: #e2e8f0 !important;
+}
+
+/* Ensure strong readability for text classes inside the main light container area */
+:not(aside):not(#supabase-auth-screen) .text-zinc-100,
+:not(aside):not(#supabase-auth-screen) .text-zinc-200,
+:not(aside):not(#supabase-auth-screen) .text-zinc-300,
+:not(aside):not(#supabase-auth-screen) h2,
+:not(aside):not(#supabase-auth-screen) h3,
+:not(aside):not(#supabase-auth-screen) h4 {
+  color: #0f172a !important;
+}
+
+:not(aside):not(#supabase-auth-screen) .text-zinc-400,
+:not(aside):not(#supabase-auth-screen) .text-zinc-500,
+:not(aside):not(#supabase-auth-screen) .text-zinc-550 {
+  color: #475569 !important; /* Elegant gray descriptions */
+}
+
+/* 2. Redefine dark borders to crisp slate grays */
+:not(aside):not(#supabase-auth-screen) .border-zinc-800,
+:not(aside):not(#supabase-auth-screen) .border-zinc-805,
+:not(aside):not(#supabase-auth-screen) .border-zinc-850 {
+  border-color: #e2e8f0 !important;
+}
+
+/* 3. Inputs, selects, and text fields custom light styling */
+:not(aside):not(#supabase-auth-screen) input,
+:not(aside):not(#supabase-auth-screen) select,
+:not(aside):not(#supabase-auth-screen) textarea,
+:not(aside):not(#supabase-auth-screen) input[class*="bg-"],
+:not(aside):not(#supabase-auth-screen) select[class*="bg-"] {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+  border-color: #cbd5e1 !important;
+  border-width: 1px !important;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.05) !important;
+}
+
+:not(aside):not(#supabase-auth-screen) input:focus,
+:not(aside):not(#supabase-auth-screen) select:focus,
+:not(aside):not(#supabase-auth-screen) textarea:focus {
+  border-color: #007cbd !important;
+  box-shadow: 0 0 0 2px rgba(0, 124, 189, 0.15) !important;
+  outline: none !important;
+}
+
+/* 4. Corporate Action Buttons */
+/* Normal gray/zinc buttons become elegant light slate buttons */
+:not(aside):not(#supabase-auth-screen) button.bg-zinc-900,
+:not(aside):not(#supabase-auth-screen) button.bg-zinc-800,
+:not(aside):not(#supabase-auth-screen) button[class*="bg-zinc-"] {
+  background-color: #f1f5f9 !important;
+  color: #334155 !important;
+  border-color: #cbd5e1 !important;
+  border-width: 1px !important;
+  cursor: pointer !important;
+}
+
+:not(aside):not(#supabase-auth-screen) button.bg-zinc-900:hover,
+:not(aside):not(#supabase-auth-screen) button.bg-zinc-800:hover {
+  background-color: #e2e8f0 !important;
+  color: #0f172a !important;
+  border-color: #94a3b8 !important;
+}
+
+/* Brighten blue buttons config (Xero blue palette) */
+:not(aside):not(#supabase-auth-screen) button.bg-blue-600 {
+  background-color: #007cbd !important; /* Xero Blue */
+  color: #ffffff !important;
+  border: none !important;
+}
+
+:not(aside):not(#supabase-auth-screen) button.bg-blue-600:hover {
+  background-color: #026ca5 !important;
+}
+
+/* Green indicators & buttons (QuickBooks green palette) */
+:not(aside):not(#supabase-auth-screen) .text-emerald-400 {
+  color: #15803d !important; /* Saturated Green */
+}
+
+:not(aside):not(#supabase-auth-screen) .bg-emerald-950\/40 {
+  background-color: #f0fdf4 !important;
+  color: #15803d !important;
+}
+
+/* 5. Custom high-quality, high-contrast accounting ledger row styling */
+:not(aside):not(#supabase-auth-screen) table {
+  background-color: #ffffff !important;
+  border-collapse: collapse !important;
+}
+
+:not(aside):not(#supabase-auth-screen) thead,
+:not(aside):not(#supabase-auth-screen) tr[class*="bg-[#09090b]"] {
+  background-color: #f1f5f9 !important;
+}
+
+:not(aside):not(#supabase-auth-screen) thead th {
+  background-color: #f1f5f9 !important;
+  color: #475569 !important;
+  font-weight: 600 !important;
+  font-size: 11px !important;
+  border-bottom: 2px solid #e2e8f0 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.05em !important;
+}
+
+:not(aside):not(#supabase-auth-screen) tbody tr {
+  border-bottom: 1px solid #f1f5f9 !important;
+}
+
+:not(aside):not(#supabase-auth-screen) tr:hover {
+  background-color: #f8fafc !important;
+}
+
+/* 6. Dynamic Account Class Tag Translations */
+/* Redefine badging inside account grids for high clarity */
+:not(aside):not(#supabase-auth-screen) span[class*="bg-blue-950\/40"] {
+  background-color: #eff6ff !important;
+  color: #1d4ed8 !important;
+  border-color: #bfdbfe !important;
+}
+
+:not(aside):not(#supabase-auth-screen) span[class*="bg-red-950\/40"] {
+  background-color: #fef2f2 !important;
+  color: #b91c1c !important;
+  border-color: #fecaca !important;
+}
+
+:not(aside):not(#supabase-auth-screen) span[class*="bg-emerald-950\/40"] {
+  background-color: #ecfdf5 !important;
+  color: #047857 !important;
+  border-color: #a7f3d0 !important;
+}
+
+:not(aside):not(#supabase-auth-screen) span[class*="bg-zinc-800"] {
+  background-color: #f1f5f9 !important;
+  color: #334155 !important;
+  border-color: #cbd5e1 !important;
+}
+
+:not(aside):not(#supabase-auth-screen) span[class*="bg-amber-950\/40"] {
+  background-color: #fffbeb !important;
+  color: #b45309 !important;
+  border-color: #fde68a !important;
+}
+
+/* Welcome Banner transformation (Soft background for high-end feel) */
+:not(aside):not(#supabase-auth-screen) div[class*="bg-gradient-to-r"] {
+  background-image: linear-gradient(135deg, #f0f7ff, #ffffff) !important;
+  border-color: #bfdbfe !important;
+  color: #1e3a8a !important;
+}
+
+:not(aside):not(#supabase-auth-screen) div[class*="bg-gradient-to-r"] h2 {
+  color: #1e3a8a !important;
+}
+
+:not(aside):not(#supabase-auth-screen) div[class*="bg-gradient-to-r"] p {
+  color: #3b82f6 !important;
+}
+
+/* Compliance status delta banner updates */
+:not(aside):not(#supabase-auth-screen) div[class*="bg-blue-500\/10"] {
+  background-color: #e0f2fe !important;
+  color: #0369a1 !important;
+}
+
+:not(aside):not(#supabase-auth-screen) div[class*="bg-red-500\/10"] {
+  background-color: #fee2e2 !important;
+  color: #b91c1c !important;
+}
+
+:not(aside):not(#supabase-auth-screen) div[class*="bg-emerald-500\/10"] {
+  background-color: #d1fae5 !important;
+  color: #047857 !important;
+}
+
+:not(aside):not(#supabase-auth-screen) div[class*="bg-amber-500\/10"] {
+  background-color: #fef3c7 !important;
+  color: #b45309 !important;
+}
+
+/* Progress bar rail custom color compatibility */
+:not(aside):not(#supabase-auth-screen) .bg-zinc-900[class*="h-3"] {
+  background-color: #e2e8f0 !important;
+  border-color: #cbd5e1 !important;
+}
+
+/* Interactive Quick Operations blocks in Dashboard */
+:not(aside):not(#supabase-auth-screen) div[class*="space-y-2.5"] button {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+  color: #0f172a !important;
+}
+
+:not(aside):not(#supabase-auth-screen) div[class*="space-y-2.5"] button:hover {
+  background-color: #f1f5f9 !important;
+  border-color: #cbd5e1 !important;
+}
+
+/* Balanced Ledger Status indicators */
+span[class*="text-blue-400"] {
+  color: #0284c7 !important;
+}
+
+/* Invoices and Compliance views - specific highlights */
+:not(aside):not(#supabase-auth-screen) div[class*="border-[#1e293b]"],
+:not(aside):not(#supabase-auth-screen) div[class*="border-zinc-800"] {
+  border-color: #e2e8f0 !important;
+}
+
+/* Unified Footer adjustments */
+footer.bg-\[\#121214\] {
+  background-color: #ffffff !important;
+  border-top: 1px solid #e2e8f0 !important;
+  color: #475569 !important;
+}
+
+/* Modals overlays background */
+.fixed.inset-0.bg-black\/75 {
+  background-color: rgba(15, 23, 42, 0.45) !important;
+  backdrop-filter: blur(4px) !important;
+}
+
+/* 7. Beautiful high-converting Supabase Auth page background */
+#supabase-auth-screen {
+  background-color: #f8fafc !important; /* Elegant light-slate background */
+  font-family: var(--font-sans);
+}
+
+#supabase-auth-screen h1,
+#supabase-auth-screen h2 {
+  color: #0f172a !important;
+}
+
+#supabase-auth-screen p {
+  color: #475569 !important;
+}
+
+#supabase-auth-screen .bg-\[\#121214\],
+#supabase-auth-screen div.bg-zinc-900\/50 {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05) !important;
+}
+
+#supabase-auth-screen button:not([class*="bg-blue-600"]) {
+  background-color: #f1f5f9 !important;
+  color: #334155 !important;
+  border-color: #cbd5e1 !important;
+}
+
+#supabase-auth-screen button:not([class*="bg-blue-600"]):hover {
+  background-color: #e2e8f0 !important;
+}
+
+#supabase-auth-screen input {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+  border-color: #cbd5e1 !important;
+}
+
+#supabase-auth-screen input:focus {
+  border-color: #007cbd !important;
+}
+

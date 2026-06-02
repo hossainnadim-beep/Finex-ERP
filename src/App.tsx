@@ -44,9 +44,10 @@ export default function App() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
 
   // Dynamic ledger accounts state (loaded from Supabase or fallback defaults)
-  const getLocalSandboxAccounts = (): Account[] => {
+  const getLocalSandboxAccounts = (userId?: string): Account[] => {
     try {
-      const saved = localStorage.getItem('conexerp_sandbox_accounts');
+      const activeId = userId || session?.user?.id || 'guest';
+      const saved = localStorage.getItem(`conexerp_sandbox_accounts_${activeId}`);
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
@@ -59,27 +60,36 @@ export default function App() {
     return CHART_OF_ACCOUNTS;
   };
 
-  const [accounts, setAccounts] = useState<Account[]>(getLocalSandboxAccounts());
+  const [accounts, setAccounts] = useState<Account[]>([]);
   const [accountsLoading, setAccountsLoading] = useState<boolean>(false);
   const [accountsSource, setAccountsSource] = useState<'local' | 'supabase' | 'supabase-empty'>('local');
 
-  // Load initial data & restore local storage backup for sandbox
+  // Load initial data & restore local storage backup for sandbox whenever session changes
   useEffect(() => {
-    // 1. Recover customize accounts layout from localStorage
-    const savedSandboxAccounts = localStorage.getItem('conexerp_sandbox_accounts');
+    if (!session) return;
+    
+    const userId = session.user?.id || 'guest';
+
+    // 1. Recover customized accounts layout from localStorage
+    const savedSandboxAccounts = localStorage.getItem(`conexerp_sandbox_accounts_${userId}`);
     if (savedSandboxAccounts) {
       try {
         const parsedAccts = JSON.parse(savedSandboxAccounts);
         if (Array.isArray(parsedAccts) && parsedAccts.length > 0) {
           setAccounts(parsedAccts);
+        } else {
+          setAccounts(CHART_OF_ACCOUNTS);
         }
       } catch (e) {
         console.error('Error loading sandbox accounts:', e);
+        setAccounts(CHART_OF_ACCOUNTS);
       }
+    } else {
+      setAccounts(CHART_OF_ACCOUNTS);
     }
 
     // 2. Recover custom journal entries list from local storage backup
-    const savedSandboxJE = localStorage.getItem('conexerp_sandbox_journal_entries');
+    const savedSandboxJE = localStorage.getItem(`conexerp_sandbox_journal_entries_${userId}`);
     let initialJEList = INITIAL_JOURNAL_ENTRIES;
     if (savedSandboxJE) {
       try {
@@ -99,7 +109,7 @@ export default function App() {
     }
     
     // 3. Recover business action audit logs list from local storage backup
-    const savedSandboxLogs = localStorage.getItem('conexerp_sandbox_audit_logs');
+    const savedSandboxLogs = localStorage.getItem(`conexerp_sandbox_audit_logs_${userId}`);
     let initialLogsList: AuditLog[] = [];
     if (savedSandboxLogs) {
       try {
@@ -117,14 +127,14 @@ export default function App() {
       // Bootstrap initial audit ledger logs
       initialLogsList = [
         {
-          id: 'L-INIT-01',
+          id: `L-INIT-01-${userId}`,
           timestamp: new Date(Date.now() - 360000000).toISOString(),
           action: 'CREATE',
           actor: 'audit-automaton@finexerp.io',
           details: 'Enterprise Ledger environment initialized. Chart of Accounts registered in database.'
         },
         ...initialJEList.map((entry, idx) => ({
-          id: `L-INIT-JE-${idx}`,
+          id: `L-INIT-JE-${idx}-${userId}`,
           timestamp: entry.createdAt,
           action: 'CREATE' as const,
           actor: entry.createdBy,
@@ -133,9 +143,9 @@ export default function App() {
         }))
       ];
       setAuditLogs(initialLogsList);
-      localStorage.setItem('conexerp_sandbox_audit_logs', JSON.stringify(initialLogsList));
+      localStorage.setItem(`conexerp_sandbox_audit_logs_${userId}`, JSON.stringify(initialLogsList));
     }
-  }, []);
+  }, [session]);
 
   // Log successful login events when session state is registered and active
   useEffect(() => {
@@ -169,7 +179,8 @@ export default function App() {
     newData: any
   ) => {
     try {
-      const savedLocalDb = localStorage.getItem('conexerp_sandbox_audit_logs_db');
+      const userId = session?.user?.id || 'guest';
+      const savedLocalDb = localStorage.getItem(`conexerp_sandbox_audit_logs_db_${userId}`);
       let currentLogs: any[] = [];
       if (savedLocalDb) {
         currentLogs = JSON.parse(savedLocalDb);
@@ -187,11 +198,11 @@ export default function App() {
       };
       
       const updatedLogs = [newLogObj, ...currentLogs];
-      localStorage.setItem('conexerp_sandbox_audit_logs_db', JSON.stringify(updatedLogs));
+      localStorage.setItem(`conexerp_sandbox_audit_logs_db_${userId}`, JSON.stringify(updatedLogs));
       
       // Broadcast this change so other tabs reload instantly!
       const syncChannel = new BroadcastChannel('conexerp_sync_channel');
-      syncChannel.postMessage({ type: 'SYNC_STATE_TRIGGER' });
+      syncChannel.postMessage({ type: 'SYNC_STATE_TRIGGER', userId });
       syncChannel.close();
     } catch (e) {
       console.error('Error writing local Db audit log:', e);
@@ -204,11 +215,13 @@ export default function App() {
     
     syncChannel.onmessage = (event) => {
       console.log('Realtime Tab Sync Handshake:', event.data);
-      const { type } = event.data || {};
+      const { type, userId: eventUserId } = event.data || {};
+      const currentUserId = session?.user?.id || 'guest';
       
-      if (type === 'SYNC_STATE_TRIGGER') {
+      // Only process sync if it belongs to the active logged-in user!
+      if (type === 'SYNC_STATE_TRIGGER' && (!eventUserId || eventUserId === currentUserId)) {
         // Read updated lists from localStorage in other tabs immediately
-        const savedAccounts = localStorage.getItem('conexerp_sandbox_accounts');
+        const savedAccounts = localStorage.getItem(`conexerp_sandbox_accounts_${currentUserId}`);
         if (savedAccounts) {
           try {
             const parsed = JSON.parse(savedAccounts);
@@ -220,7 +233,7 @@ export default function App() {
           }
         }
         
-        const savedJE = localStorage.getItem('conexerp_sandbox_journal_entries');
+        const savedJE = localStorage.getItem(`conexerp_sandbox_journal_entries_${currentUserId}`);
         if (savedJE) {
           try {
             const parsed = JSON.parse(savedJE);
@@ -232,7 +245,7 @@ export default function App() {
           }
         }
         
-        const savedLogs = localStorage.getItem('conexerp_sandbox_audit_logs');
+        const savedLogs = localStorage.getItem(`conexerp_sandbox_audit_logs_${currentUserId}`);
         if (savedLogs) {
           try {
             const parsed = JSON.parse(savedLogs);
@@ -249,7 +262,7 @@ export default function App() {
     return () => {
       syncChannel.close();
     };
-  }, []);
+  }, [session]);
 
   // 2) Handle real-time cloud database changes from Supabase publication triggers (Multi-device sync)
   useEffect(() => {
@@ -312,6 +325,7 @@ export default function App() {
         const { data: dbEntries, error: errE } = await supabase
           .from('journal_entries')
           .select('*')
+          .eq('user_id', session.user.id)
           .order('date', { ascending: false })
           .order('created_at', { ascending: false });
 
@@ -375,6 +389,7 @@ export default function App() {
         const { data, error } = await supabase
           .from('accounts')
           .select('*')
+          .eq('user_id', session.user.id)
           .order('id', { ascending: true });
 
         if (error) {
@@ -386,7 +401,8 @@ export default function App() {
           const mappedAccounts = data.map(mapDbAccount);
           
           // Merge with any custom local storage accounts not yet in cloud to avoid losing freshly added accounts
-          const localAccounts = getLocalSandboxAccounts();
+          const userId = session?.user?.id || 'guest';
+          const localAccounts = getLocalSandboxAccounts(userId);
           const mergedAccounts = [...mappedAccounts];
           localAccounts.forEach(acc => {
             if (!mergedAccounts.some(m => m.id === acc.id)) {
@@ -396,7 +412,7 @@ export default function App() {
           mergedAccounts.sort((a, b) => a.id.localeCompare(b.id));
           
           // Update local storage backup with the merged set
-          localStorage.setItem('conexerp_sandbox_accounts', JSON.stringify(mergedAccounts));
+          localStorage.setItem(`conexerp_sandbox_accounts_${userId}`, JSON.stringify(mergedAccounts));
 
           setAccounts(mergedAccounts);
           setAccountsSource('supabase');
@@ -404,7 +420,8 @@ export default function App() {
           await fetchJournalEntriesFromSupabase(mergedAccounts);
         } else {
           setAccountsSource('supabase-empty');
-          const localAccounts = getLocalSandboxAccounts();
+          const userId = session?.user?.id || 'guest';
+          const localAccounts = getLocalSandboxAccounts(userId);
           setAccounts(localAccounts);
           await fetchJournalEntriesFromSupabase(localAccounts);
         }
@@ -431,11 +448,17 @@ export default function App() {
   const handleSeedAccounts = async () => {
     if (session?.mode === 'supabase' && supabase) {
       setAccountsLoading(true);
+      const userId = session.user.id;
       try {
+        const withUserChart = CHART_OF_ACCOUNTS.map(acc => ({
+          ...acc,
+          user_id: userId
+        }));
+        
         // Try standard camelCase schema insert first
         const { error } = await supabase
           .from('accounts')
-          .insert(CHART_OF_ACCOUNTS);
+          .insert(withUserChart);
 
         if (error) {
           console.warn('First seeding wave failed, trying snake_case schema:', error.message);
@@ -444,7 +467,8 @@ export default function App() {
             name: acc.name,
             class: acc.class,
             normal_balance: acc.normalBalance,
-            description: acc.description
+            description: acc.description,
+            user_id: userId
           }));
           const { error: error2 } = await supabase
             .from('accounts')
@@ -457,7 +481,8 @@ export default function App() {
               account_name: acc.name,
               account_class: acc.class,
               normal_balance: acc.normalBalance,
-              description: acc.description
+              description: acc.description,
+              user_id: userId
             }));
             const { error: error3 } = await supabase
               .from('accounts')
@@ -479,7 +504,11 @@ export default function App() {
           actor: session?.user?.email || 'admin@conexerp.io',
           details: 'Successfully seeded CHART_OF_ACCOUNTS schema into Supabase accounts table.'
         };
-        setAuditLogs(prev => [seedLog, ...prev]);
+        setAuditLogs(prev => {
+          const updated = [seedLog, ...prev];
+          localStorage.setItem(`conexerp_sandbox_audit_logs_${userId}`, JSON.stringify(updated));
+          return updated;
+        });
       } catch (err: any) {
         alert('Exception error while seeding accounts table: ' + err.message);
       } finally {
@@ -517,8 +546,14 @@ export default function App() {
             payload[col] = newAccount.normalBalance;
           } else if (['description', 'account_description', 'desc', 'details', 'notes'].includes(col)) {
             payload[col] = newAccount.description;
+          } else if (col === 'user_id' && session?.user?.id) {
+            payload[col] = session.user.id;
           }
         });
+        // Guarantee user_id is set
+        if (session?.user?.id) {
+          payload.user_id = session.user.id;
+        }
       } else {
         payload = {
           account_code: newAccount.id,
@@ -526,6 +561,9 @@ export default function App() {
           account_type: newAccount.class,
           is_active: true
         };
+        if (session?.user?.id) {
+          payload.user_id = session.user.id;
+        }
       }
 
       console.log('Inserting custom account payload to Supabase:', payload);
@@ -537,24 +575,30 @@ export default function App() {
         console.warn('Inserting designed payload failed, attempting direct standard inserts:', error.message);
         
         // Try fallback snake_case direct insert
-        const snakePayload = {
+        const snakePayload: any = {
           id: newAccount.id,
           name: newAccount.name,
           class: newAccount.class,
           normal_balance: newAccount.normalBalance,
           description: newAccount.description
         };
+        if (session?.user?.id) {
+          snakePayload.user_id = session.user.id;
+        }
         const { error: errorS } = await supabase.from('accounts').insert(snakePayload);
         
         if (errorS) {
           // Try fallback database prefix direct insert
-          const prefixPayload = {
+          const prefixPayload: any = {
             account_code: newAccount.id,
             account_name: newAccount.name,
             account_class: newAccount.class,
             normal_balance: newAccount.normalBalance,
             description: newAccount.description
           };
+          if (session?.user?.id) {
+            prefixPayload.user_id = session.user.id;
+          }
           const { error: errorP } = await supabase.from('accounts').insert(prefixPayload);
           
           if (errorP) {
@@ -577,10 +621,11 @@ export default function App() {
     }
 
     // Always fallback to memory state update so the app remains fully functional and robust in all conditions
+    const userId = session?.user?.id || 'guest';
     setAccounts(prev => {
       if (prev.some(a => a.id === newAccount.id)) return prev;
       const updated = [...prev, newAccount].sort((a, b) => a.id.localeCompare(b.id));
-      localStorage.setItem('conexerp_sandbox_accounts', JSON.stringify(updated));
+      localStorage.setItem(`conexerp_sandbox_accounts_${userId}`, JSON.stringify(updated));
       return updated;
     });
 
@@ -605,7 +650,7 @@ export default function App() {
     };
     setAuditLogs(prev => {
       const updated = [createAccLog, ...prev];
-      localStorage.setItem('conexerp_sandbox_audit_logs', JSON.stringify(updated));
+      localStorage.setItem(`conexerp_sandbox_audit_logs_${userId}`, JSON.stringify(updated));
       return updated;
     });
 
@@ -617,6 +662,213 @@ export default function App() {
       normal_balance: newAccount.normalBalance,
       description: newAccount.description
     });
+
+    return true;
+  };
+
+  const handleUpdateAccount = async (targetId: string, updatedAccount: Account): Promise<boolean> => {
+    let cloudSaved = false;
+    let dbErrorMessage = '';
+
+    if (session?.mode === 'supabase' && supabase) {
+      let payload: any = {};
+      
+      if (dbColumns && dbColumns.length > 0) {
+        dbColumns.forEach(col => {
+          if (col === 'created_at' || col === 'updated_at') return;
+          
+          if (col === 'id') {
+            const hasOtherCodeField = dbColumns.some(c => ['code', 'account_code', 'number', 'account_number', 'gl_code'].includes(c));
+            if (!hasOtherCodeField) {
+              payload.id = updatedAccount.id;
+            }
+          } else if (['code', 'account_code', 'number', 'account_number', 'gl_code', 'acct_code'].includes(col)) {
+            payload[col] = updatedAccount.id;
+          } else if (['name', 'account_name', 'title', 'label'].includes(col)) {
+            payload[col] = updatedAccount.name;
+          } else if (['class', 'account_class', 'type', 'account_type', 'classification', 'category'].includes(col)) {
+            payload[col] = updatedAccount.class;
+          } else if (['normalBalance', 'normal_balance', 'normalbalance', 'balance_type', 'direction'].includes(col)) {
+            payload[col] = updatedAccount.normalBalance;
+          } else if (['description', 'account_description', 'desc', 'details', 'notes'].includes(col)) {
+            payload[col] = updatedAccount.description;
+          } else if (col === 'user_id' && session?.user?.id) {
+            payload[col] = session.user.id;
+          }
+        });
+      } else {
+        payload = {
+          account_name: updatedAccount.name,
+          account_type: updatedAccount.class,
+          description: updatedAccount.description
+        };
+      }
+
+      console.log(`Updating account code #${targetId} in Supabase:`, payload);
+      const idCol = dbColumns && dbColumns.includes('account_code') ? 'account_code' : (dbColumns && dbColumns.includes('code') ? 'code' : 'id');
+      const { error } = await supabase
+        .from('accounts')
+        .update(payload)
+        .eq(idCol, targetId);
+
+      if (error) {
+        console.warn('Update payload failed, attempting direct standard updates:', error.message);
+        const snakePayload: any = {
+          name: updatedAccount.name,
+          class: updatedAccount.class,
+          normal_balance: updatedAccount.normalBalance,
+          description: updatedAccount.description
+        };
+        if (session?.user?.id) snakePayload.user_id = session.user.id;
+
+        const { error: errorS } = await supabase
+          .from('accounts')
+          .update(snakePayload)
+          .eq('id', targetId);
+        
+        if (errorS) {
+          const prefixPayload: any = {
+            account_name: updatedAccount.name,
+            account_class: updatedAccount.class,
+            normal_balance: updatedAccount.normalBalance,
+            description: updatedAccount.description
+          };
+          if (session?.user?.id) prefixPayload.user_id = session.user.id;
+
+          const { error: errorP } = await supabase
+            .from('accounts')
+            .update(prefixPayload)
+            .eq('account_code', targetId);
+          
+          if (errorP) {
+            dbErrorMessage = errorP.message || error.message;
+          } else {
+            cloudSaved = true;
+          }
+        } else {
+          cloudSaved = true;
+        }
+      } else {
+        cloudSaved = true;
+      }
+
+      if (cloudSaved) {
+        await fetchAccountsFromSupabase();
+      }
+    }
+
+    // always fallback to local memory state
+    const userId = session?.user?.id || 'guest';
+    setAccounts(prev => {
+      const idx = prev.findIndex(a => a.id === targetId);
+      if (idx === -1) return prev;
+      const updated = [...prev];
+      updated[idx] = { ...updated[idx], ...updatedAccount };
+      updated.sort((a, b) => a.id.localeCompare(b.id));
+      localStorage.setItem(`conexerp_sandbox_accounts_${userId}`, JSON.stringify(updated));
+      return updated;
+    });
+
+    if (dbErrorMessage) {
+      alert(`NOTICE: Account #${updatedAccount.id} was updated locally. (Cloud write restriction: ${dbErrorMessage})`);
+    }
+
+    const updateAccLog: AuditLog = {
+      id: `L-ACCT-UPD-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      action: 'CREATE',
+      actor: session?.user?.email || 'admin@conexerp.io',
+      details: `Updated custom account category [${targetId}] "${updatedAccount.name}" (Class: ${updatedAccount.class}, Normal: ${updatedAccount.normalBalance}).`
+    };
+    setAuditLogs(prev => {
+      const updated = [updateAccLog, ...prev];
+      localStorage.setItem(`conexerp_sandbox_audit_logs_${userId}`, JSON.stringify(updated));
+      return updated;
+    });
+
+    writeLocalDbAuditLog('accounts', 'UPDATE', targetId, null, {
+      id: updatedAccount.id,
+      name: updatedAccount.name,
+      class: updatedAccount.class,
+      normal_balance: updatedAccount.normalBalance,
+      description: updatedAccount.description
+    });
+
+    return true;
+  };
+
+  const handleDeleteAccount = async (id: string): Promise<boolean> => {
+    let cloudDeleted = false;
+    let dbErrorMessage = '';
+
+    // First check if account has entries to prevent GAAP violations!
+    const hasEntries = journalEntries.some(entry => entry.lines.some(line => line.accountId === id));
+    if (hasEntries) {
+      alert(`GAAP Compliance Guard: Cannot delete account #${id} because it has active transaction ledger lines. Please reverse or reallocate those transactions first.`);
+      return false;
+    }
+
+    if (session?.mode === 'supabase' && supabase) {
+      const idCol = dbColumns && dbColumns.includes('account_code') ? 'account_code' : (dbColumns && dbColumns.includes('code') ? 'code' : 'id');
+      console.log(`Deleting account code #${id} in Supabase using column ${idCol}`);
+      
+      const { error } = await supabase
+        .from('accounts')
+        .delete()
+        .eq(idCol, id);
+
+      if (error) {
+        console.warn('Deleting with idCol failed, attempting fallback PK:', error.message);
+        const { error: errorS } = await supabase
+          .from('accounts')
+          .delete()
+          .eq('id', id);
+
+        if (errorS) {
+          const { error: errorP } = await supabase
+            .from('accounts')
+            .delete()
+            .eq('account_code', id);
+
+          if (errorP) {
+            dbErrorMessage = errorP.message || error.message;
+          } else {
+            cloudDeleted = true;
+          }
+        } else {
+          cloudDeleted = true;
+        }
+      } else {
+        cloudDeleted = true;
+      }
+
+      if (cloudDeleted) {
+        await fetchAccountsFromSupabase();
+      }
+    }
+
+    // fallback to memory
+    const userId = session?.user?.id || 'guest';
+    setAccounts(prev => {
+      const updated = prev.filter(a => a.id !== id);
+      localStorage.setItem(`conexerp_sandbox_accounts_${userId}`, JSON.stringify(updated));
+      return updated;
+    });
+
+    const deleteAccLog: AuditLog = {
+      id: `L-ACCT-DEL-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      action: 'SOFT_DELETE',
+      actor: session?.user?.email || 'admin@conexerp.io',
+      details: `Deleted general ledger account category [${id}].`
+    };
+    setAuditLogs(prev => {
+      const updated = [deleteAccLog, ...prev];
+      localStorage.setItem(`conexerp_sandbox_audit_logs_${userId}`, JSON.stringify(updated));
+      return updated;
+    });
+
+    writeLocalDbAuditLog('accounts', 'DELETE', id, null, { id });
 
     return true;
   };
@@ -640,10 +892,11 @@ export default function App() {
       createdBy: session?.user?.email || 'sandbox-auditor@enterprise.io'
     };
 
+    const userId = session?.user?.id || 'guest';
     setJournalEntries(prev => {
       if (prev.some(e => e.id === customizedEntry.id)) return prev;
       const updated = [customizedEntry, ...prev];
-      localStorage.setItem('conexerp_sandbox_journal_entries', JSON.stringify(updated));
+      localStorage.setItem(`conexerp_sandbox_journal_entries_${userId}`, JSON.stringify(updated));
       return updated;
     });
 
@@ -659,7 +912,7 @@ export default function App() {
     
     setAuditLogs(prev => {
       const updated = [postAudit, ...prev];
-      localStorage.setItem('conexerp_sandbox_audit_logs', JSON.stringify(updated));
+      localStorage.setItem(`conexerp_sandbox_audit_logs_${userId}`, JSON.stringify(updated));
       return updated;
     });
 
@@ -741,6 +994,7 @@ export default function App() {
       createdBy: session?.user?.email || 'auditor@enterprise.io'
     };
 
+    const userId = session?.user?.id || 'guest';
     setJournalEntries(prev => {
       const updated = prev.map(entry => {
         if (entry.id === originalEntryId) {
@@ -752,7 +1006,7 @@ export default function App() {
         }
         return entry;
       }).concat(reversingEntry);
-      localStorage.setItem('conexerp_sandbox_journal_entries', JSON.stringify(updated));
+      localStorage.setItem(`conexerp_sandbox_journal_entries_${userId}`, JSON.stringify(updated));
       return updated;
     });
 
@@ -767,7 +1021,7 @@ export default function App() {
 
     setAuditLogs(prev => {
       const updated = [reverseAudit, ...prev];
-      localStorage.setItem('conexerp_sandbox_audit_logs', JSON.stringify(updated));
+      localStorage.setItem(`conexerp_sandbox_audit_logs_${userId}`, JSON.stringify(updated));
       return updated;
     });
 
@@ -970,6 +1224,8 @@ export default function App() {
                 onRefresh={fetchAccountsFromSupabase}
                 onSeed={handleSeedAccounts}
                 onCreateAccount={handleCreateAccount}
+                onUpdateAccount={handleUpdateAccount}
+                onDeleteAccount={handleDeleteAccount}
               />
             </div>
           )}

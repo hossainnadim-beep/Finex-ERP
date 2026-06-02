@@ -41,8 +41,9 @@ export default function SupabaseAuth({ onLoginSuccess }: SupabaseAuthProps) {
     setLoading(true);
     setTimeout(() => {
       setLoading(false);
+      const cleanId = 'sand-usr-' + email.toLowerCase().replace(/[^a-z0-9]/g, '_');
       onLoginSuccess({
-        user: { id: 'sand-usr-777', email: email },
+        user: { id: cleanId, email: email },
         mode: 'sandbox',
         supabaseConfigured: false
       });

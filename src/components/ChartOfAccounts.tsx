@@ -11,13 +11,14 @@ import {
   Search, 
   Plus, 
   RefreshCw, 
-  Sparkles, 
   Coins, 
   Layers, 
-  FileText, 
   CheckCircle, 
   AlertTriangle,
-  BookOpen
+  BookOpen,
+  Edit2,
+  Trash2,
+  Info
 } from 'lucide-react';
 
 interface ChartOfAccountsProps {
@@ -28,6 +29,8 @@ interface ChartOfAccountsProps {
   onRefresh: () => void;
   onSeed: () => void;
   onCreateAccount: (newAccount: Account) => Promise<boolean>;
+  onUpdateAccount?: (targetId: string, updatedAccount: Account) => Promise<boolean>;
+  onDeleteAccount?: (id: string) => Promise<boolean>;
 }
 
 export default function ChartOfAccounts({
@@ -38,69 +41,61 @@ export default function ChartOfAccounts({
   onRefresh,
   onSeed,
   onCreateAccount,
+  onUpdateAccount,
+  onDeleteAccount,
 }: ChartOfAccountsProps) {
-  const { supabase } = useAuth();
+  const { supabase, session } = useAuth();
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [activeClass, setActiveClass] = useState<AccountClass | 'All'>('All');
-  const [showAddForm, setShowAddForm] = useState<boolean>(false);
+  
+  // Modals visibility toggles
+  const [showAddModal, setShowAddModal] = useState<boolean>(false);
 
   // Live accounts state fetched using Supabase client in useEffect
   const [liveAccounts, setLiveAccounts] = useState<Account[]>([]);
   const [liveLoading, setLiveLoading] = useState<boolean>(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let isMounted = true;
-    const fetchLiveAccountsFromDb = async () => {
-      setLiveLoading(true);
-      setFetchError(null);
-      try {
-        if (supabase) {
-          const { data, error } = await supabase
-            .from('accounts')
-            .select('*')
-            .order('id', { ascending: true });
-
-          if (isMounted) {
-            if (error) {
-              setFetchError(error.message);
-              setLiveAccounts(accounts);
-            } else if (data && data.length > 0) {
-              const mapped = data.map(mapDbAccount);
-              // Merge db accounts with the latest state of accounts to support local fallback seamlessly
-              const merged = [...mapped];
-              accounts.forEach(acc => {
-                if (!merged.some(m => m.id === acc.id)) {
-                  merged.push(acc);
-                }
-              });
-              setLiveAccounts(merged.sort((a, b) => a.id.localeCompare(b.id)));
-            } else {
-              setLiveAccounts(accounts);
-            }
-          }
-        } else {
-          if (isMounted) {
-            setLiveAccounts(accounts);
-          }
+  // Fetch accounts from database or rely on fallback props
+  const fetchLiveAccountsFromDb = async () => {
+    setLiveLoading(true);
+    setFetchError(null);
+    try {
+      if (supabase) {
+        let query = supabase.from('accounts').select('*');
+        if (session?.user?.id) {
+          query = query.eq('user_id', session.user.id);
         }
-      } catch (err: any) {
-        if (isMounted) {
-          setFetchError(err.message || 'Unable to scan cloud ledger database');
+        const { data, error } = await query.order('id', { ascending: true });
+
+        if (error) {
+          setFetchError(error.message);
+          setLiveAccounts(accounts);
+        } else if (data && data.length > 0) {
+          const mapped = data.map(mapDbAccount);
+          const merged = [...mapped];
+          accounts.forEach(acc => {
+            if (!merged.some(m => m.id === acc.id)) {
+              merged.push(acc);
+            }
+          });
+          setLiveAccounts(merged.sort((a, b) => a.id.localeCompare(b.id)));
+        } else {
           setLiveAccounts(accounts);
         }
-      } finally {
-        if (isMounted) {
-          setLiveLoading(false);
-        }
+      } else {
+        setLiveAccounts(accounts);
       }
-    };
+    } catch (err: any) {
+      setFetchError(err.message || 'Unable to load ledger accounts');
+      setLiveAccounts(accounts);
+    } finally {
+      setLiveLoading(false);
+    }
+  };
 
+  useEffect(() => {
     fetchLiveAccountsFromDb();
-
-    return () => {
-      isMounted = false;
-    };
   }, [accounts]);
 
   // Form states for adding custom Account
@@ -113,6 +108,20 @@ export default function ChartOfAccounts({
   const [formSuccess, setFormSuccess] = useState<boolean>(false);
   const [savingAccount, setSavingAccount] = useState<boolean>(false);
 
+  // States for Editing Account
+  const [editingAccount, setEditingAccount] = useState<Account | null>(null);
+  const [editName, setEditName] = useState<string>('');
+  const [editClass, setEditClass] = useState<AccountClass>('Asset');
+  const [editNormal, setEditNormal] = useState<NormalBalanceType>('Debit');
+  const [editDesc, setEditDesc] = useState<string>('');
+  const [editError, setEditError] = useState<string | null>(null);
+  const [updatingAccount, setUpdatingAccount] = useState<boolean>(false);
+
+  // States for Deleting Account
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deletingLoading, setDeletingLoading] = useState<boolean>(false);
+
   // Auto-detect normal balance on class modification to be helpful
   const handleClassChange = (cls: AccountClass) => {
     setNewClass(cls);
@@ -120,6 +129,15 @@ export default function ChartOfAccounts({
       setNewNormal('Debit');
     } else {
       setNewNormal('Credit');
+    }
+  };
+
+  const handleEditClassChange = (cls: AccountClass) => {
+    setEditClass(cls);
+    if (cls === 'Asset' || cls === 'Expense') {
+      setEditNormal('Debit');
+    } else {
+      setEditNormal('Credit');
     }
   };
 
@@ -188,15 +206,77 @@ export default function ChartOfAccounts({
         setNewId('');
         setNewName('');
         setNewDesc('');
+        await fetchLiveAccountsFromDb();
         setTimeout(() => {
-          setShowAddForm(false);
+          setShowAddModal(false);
           setFormSuccess(false);
-        }, 1500);
+        }, 1200);
       }
     } catch (err: any) {
       setFormError(err.message || 'Fatal error while saving account general ledger row.');
     } finally {
       setSavingAccount(false);
+    }
+  };
+
+  const handleEditAccountSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingAccount) return;
+    setEditError(null);
+
+    if (!editName.trim()) {
+      setEditError('Account name is required.');
+      return;
+    }
+
+    setUpdatingAccount(true);
+    try {
+      if (onUpdateAccount) {
+        const success = await onUpdateAccount(editingAccount.id, {
+          id: editingAccount.id,
+          name: editName.trim(),
+          class: editClass,
+          normalBalance: editNormal,
+          description: editDesc.trim() || `${editName.trim()} description.`
+        });
+
+        if (success) {
+          await fetchLiveAccountsFromDb();
+          setEditingAccount(null);
+        } else {
+          setEditError('Failed to update general ledger account details.');
+        }
+      } else {
+        setEditError('System update callback handler not registered.');
+      }
+    } catch (err: any) {
+      setEditError(err?.message || 'Error occurred while saving changes.');
+    } finally {
+      setUpdatingAccount(false);
+    }
+  };
+
+  const handleDeleteAccountSubmit = async () => {
+    if (!deletingId) return;
+    setDeleteError(null);
+    setDeletingLoading(true);
+
+    try {
+      if (onDeleteAccount) {
+        const success = await onDeleteAccount(deletingId);
+        if (success) {
+          await fetchLiveAccountsFromDb();
+          setDeletingId(null);
+        } else {
+          setDeleteError('Failed to remove ledger account from database.');
+        }
+      } else {
+        setDeleteError('System delete callback handler not registered.');
+      }
+    } catch (err: any) {
+      setDeleteError(err?.message || 'Error occurred while deleting account.');
+    } finally {
+      setDeletingLoading(false);
     }
   };
 
@@ -264,208 +344,67 @@ export default function ChartOfAccounts({
   return (
     <div className="space-y-6">
       
-      {/* Title & DB Synchronization Header */}
+      {/* Title & Organization Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h2 className="text-base font-semibold uppercase tracking-wider text-zinc-100 flex items-center gap-2">
-            <Coins className="h-4.5 w-4.5 text-blue-500" /> General Ledger Chart of Accounts
+            <Coins className="h-4.5 w-4.5 text-blue-500" /> Chart of Accounts
           </h2>
-          <p className="text-xs text-zinc-500 mt-0.5">Define and monitor the structural financial balance targets</p>
+          <p className="text-xs text-zinc-500 mt-0.5">View and customize your company's accounting ledger and categories</p>
         </div>
 
         <div className="flex items-center gap-2">
-          {/* DB Status Label */}
-          {source === 'supabase' && (
-            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[10px] font-bold uppercase rounded font-mono">
-              <Database className="w-3 h-3" /> Supabase Synced Table
-            </span>
-          )}
-          {source === 'supabase-empty' && (
-            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-500/10 border border-amber-500/20 text-amber-400 text-[10px] font-bold uppercase rounded font-mono">
-              <Database className="w-3 h-3" /> Supabase Empty Table
-            </span>
-          )}
-          {source === 'local' && (
-            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-zinc-800 border border-zinc-700 text-zinc-400 text-[10px] font-bold uppercase rounded font-mono">
-              <Database className="w-3 h-3" /> Local Sandbox Fallback
-            </span>
-          )}
-
           {/* Action Control Icon buttons */}
           <button
-            onClick={onRefresh}
-            disabled={isLoading}
+            onClick={() => {
+              onRefresh();
+              fetchLiveAccountsFromDb();
+            }}
+            disabled={isLoading || liveLoading}
             className="p-1.5 bg-zinc-900 border border-zinc-800 hover:bg-zinc-805 hover:border-zinc-700 text-zinc-400 hover:text-white rounded transition-colors cursor-pointer disabled:opacity-40"
-            title="Refresh accounts from Supabase"
+            title="Sync accounts list"
           >
-            <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`h-3.5 w-3.5 ${isLoading || liveLoading ? 'animate-spin' : ''}`} />
           </button>
 
           <button
             onClick={() => {
               setFormError(null);
               setFormSuccess(false);
-              setShowAddForm(!showAddForm);
+              setShowAddModal(true);
             }}
             className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs font-semibold shadow-md shadow-blue-900/10 cursor-pointer transition-colors"
           >
             <Plus className="h-3.5 w-3.5" />
-            <span>New Account</span>
+            <span>Add New Account</span>
           </button>
         </div>
       </div>
 
-      {/* Supabase Empty Seeding Panel Notice */}
+      {/* Baseline Seeding Notice */}
       {source === 'supabase-empty' && (
-        <div className="p-5 bg-gradient-to-r from-amber-950/15 via-zinc-900 to-[#121214] border border-amber-800/30 rounded-lg flex flex-col sm:flex-row items-center justify-between gap-4 font-sans text-xs">
+        <div className="p-5 bg-gradient-to-r from-amber-950/15 via-zinc-900 to-[#121214] border border-zinc-800/80 rounded-lg flex flex-col sm:flex-row items-center justify-between gap-4 font-sans text-xs animate-fade-in">
           <div className="flex gap-3">
             <AlertTriangle className="h-5 w-5 text-amber-500 shrink-0 mt-0.5" />
             <div>
-              <span className="font-bold text-zinc-200 block">Supabase accounts table detected but empty</span>
+              <span className="font-bold text-zinc-200 block">Your Chart of Accounts is currently empty</span>
               <p className="text-zinc-400 leading-relaxed max-w-xl mt-1">
-                Your connection to Supabase finex-project is authentic, but the table contains zero operational categories. Seeding will write the 11 baseline accounting classifications (Assets, Liabilities, Equity) in standard accounts automatically.
+                Begin setting up your general ledger by generating a standard baseline chart of accounts. This automatically populates common accounts like Cash, Accounts Receivable, and Sales Revenue.
               </p>
             </div>
           </div>
           <button
             onClick={onSeed}
             disabled={isLoading}
-            className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-zinc-900 font-bold uppercase tracking-wider text-[10px] rounded shrink-0 transition-colors cursor-pointer disabled:opacity-50"
+            className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold uppercase tracking-wider text-[10px] rounded shrink-0 transition-colors cursor-pointer disabled:opacity-50"
           >
-            {isLoading ? 'Seeding...' : 'Seed Baseline Chart'}
+            {isLoading ? 'Setting up...' : 'Setup Standard Accounts'}
           </button>
         </div>
       )}
 
-      {/* Local Fallback Telemetry Warning */}
-      {source === 'local' && (
-        <div className="p-4 bg-zinc-900/40 border border-zinc-800/80 rounded text-xs text-zinc-400 font-sans leading-relaxed">
-          💡 <strong>Setup Guidance:</strong> Operating in sandbox fallback dataset mode. To read directly from your personal live Supabase database: create an <code className="font-mono bg-zinc-950 px-1 text-zinc-300">accounts</code> table with columns <code className="font-mono bg-zinc-950 px-1 text-zinc-300">id (text, PK)</code>, <code className="font-mono bg-[#09090b] px-1 text-zinc-205">name (text)</code>, <code className="font-mono bg-[#09090b] px-1 text-zinc-205">class (text)</code>, <code className="font-mono bg-[#09090b] px-1 text-zinc-205">normalBalance (text)</code>, <code className="font-mono bg-[#09090b] px-1 text-zinc-205">description (text)</code> in your database cluster, or copy the values in Connection Config.
-        </div>
-      )}
-
-      {/* Add Account Expandable Form Workspace */}
-      {showAddForm && (
-        <form 
-          onSubmit={handleAddAccountSubmit} 
-          className="p-5 bg-[#121214] rounded border border-zinc-800 font-sans space-y-4 shadow-xl animate-fade-in"
-        >
-          <div className="flex items-center gap-2 border-b border-zinc-850 pb-3">
-            <BookOpen className="h-4 w-4 text-blue-500" />
-            <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-200">Register General Ledger Account Form</h3>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs">
-            
-            {/* Account Code / ID */}
-            <div className="space-y-1.5">
-              <label className="block text-zinc-400 font-semibold">Account Code (numeric)</label>
-              <input
-                type="text"
-                placeholder="e.g., 1050, 5040"
-                value={newId}
-                onChange={e => setNewId(e.target.value)}
-                className="w-full bg-[#09090b] border border-zinc-800 focus:border-zinc-705 focus:outline-none p-2 rounded text-zinc-200 font-mono"
-              />
-            </div>
-
-            {/* Account Name */}
-            <div className="space-y-1.5">
-              <label className="block text-zinc-400 font-semibold">Account Name</label>
-              <input
-                type="text"
-                placeholder="e.g., Petty Cash Box, Software Income"
-                value={newName}
-                onChange={e => setNewName(e.target.value)}
-                className="w-full bg-[#09090b] border border-zinc-800 focus:border-zinc-705 focus:outline-none p-2 rounded text-zinc-200"
-              />
-            </div>
-
-            {/* Account Classification */}
-            <div className="space-y-1.5">
-              <label className="block text-zinc-400 font-semibold">Account Classification</label>
-              <select
-                value={newClass}
-                onChange={e => handleClassChange(e.target.value as AccountClass)}
-                className="w-full bg-[#09090b] border border-zinc-800 focus:border-zinc-705 focus:outline-none p-2 rounded text-zinc-200"
-              >
-                <option value="Asset">Asset</option>
-                <option value="Liability">Liability</option>
-                <option value="Equity">Equity</option>
-                <option value="Revenue">Revenue</option>
-                <option value="Expense">Expense</option>
-              </select>
-            </div>
-
-            {/* Normal Balance direction */}
-            <div className="space-y-1.5">
-              <label className="block text-zinc-400 font-semibold">Normal Balance Type</label>
-              <select
-                value={newNormal}
-                onChange={e => setNewNormal(e.target.value as NormalBalanceType)}
-                className="w-full bg-[#09090b] border border-zinc-800 focus:border-zinc-705 focus:outline-none p-2 rounded text-zinc-200"
-              >
-                <option value="Debit">Debit</option>
-                <option value="Credit">Credit</option>
-              </select>
-            </div>
-
-          </div>
-
-          {/* Optional description */}
-          <div className="space-y-1.5 text-xs">
-            <label className="block text-zinc-400 font-semibold">Purpose &amp; Description</label>
-            <input
-              type="text"
-              placeholder="e.g., Capital accounting for cash reserves, outstanding credit notes, hardware capital..."
-              value={newDesc}
-              onChange={e => setNewDesc(e.target.value)}
-              className="w-full bg-[#09090b] border border-zinc-800 focus:border-zinc-705 focus:outline-none p-2 rounded text-zinc-200"
-            />
-          </div>
-
-          {/* Form diagnostics reports overlay */}
-          {formError && (
-            <div className="p-3 bg-red-950/20 border border-red-900/30 text-red-400 rounded text-xs font-semibold flex items-center gap-2">
-              <AlertTriangle className="h-4 w-4 shrink-0" />
-              <span>{formError}</span>
-            </div>
-          )}
-
-          {formSuccess && (
-            <div className="p-3 bg-emerald-950/20 border border-emerald-900/30 text-emerald-400 rounded text-xs font-semibold flex items-center gap-2">
-              <CheckCircle className="h-4 w-4 shrink-0" />
-              <span>General ledger account created successfully!</span>
-            </div>
-          )}
-
-          {/* Form Actions */}
-          <div className="flex justify-end gap-2 text-xs pt-2">
-            <button
-              type="button"
-              onClick={() => {
-                setFormError(null);
-                setFormSuccess(false);
-                setShowAddForm(false);
-              }}
-              className="px-4 py-2 bg-zinc-900 border border-zinc-800 hover:bg-zinc-805 text-zinc-400 hover:text-white rounded transition-colors cursor-pointer"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={savingAccount}
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded font-semibold transition-colors cursor-pointer flex items-center gap-1.5 disabled:opacity-40"
-            >
-              {savingAccount ? 'Writing row...' : 'Register Account'}
-            </button>
-          </div>
-
-        </form>
-      )}
-
       {/* Search Input, Filtering Actions Pills */}
-      <div className="bg-[#121214] p-4 rounded border border-zinc-800 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4 select-none">
+      <div className="bg-[#121214] p-4 rounded border border-zinc-805 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4 select-none">
         {/* Search */}
         <div className="relative flex-1 max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-500" />
@@ -512,12 +451,12 @@ export default function ChartOfAccounts({
         {(isLoading || liveLoading) && liveAccounts.length === 0 ? (
           <div className="p-12 text-center text-zinc-500 text-xs">
             <RefreshCw className="h-6 w-6 animate-spin mx-auto text-blue-500 mb-2" />
-            <p>Loading accounts from Supabase query endpoint...</p>
+            <p>Loading accounts list...</p>
           </div>
         ) : filteredAccounts.length === 0 ? (
           <div className="p-12 text-center text-zinc-500 text-xs">
             <Layers className="h-6 w-6 mx-auto text-zinc-650 mb-2" />
-            <p>No operational accounts found matching filters.</p>
+            <p>No accounts found matching filters.</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -525,7 +464,7 @@ export default function ChartOfAccounts({
             {(isLoading || liveLoading) && (
               <div className="bg-blue-950/20 text-blue-400 text-[10px] px-5 py-2 flex items-center gap-2 border-b border-zinc-800 animate-pulse">
                 <RefreshCw className="w-3 h-3 animate-spin text-blue-400" />
-                <span>Re-syncing with live Supabase database accounts table...</span>
+                <span>Syncing general ledger accounts...</span>
               </div>
             )}
             <table className="min-w-full divide-y divide-zinc-800 text-xs">
@@ -539,6 +478,7 @@ export default function ChartOfAccounts({
                   <th className="px-5 py-3 text-right">Debit Balance</th>
                   <th className="px-5 py-3 text-right">Credit Balance</th>
                   <th className="px-5 py-3 text-right">Account Balance</th>
+                  <th className="px-5 py-3 text-center w-24">Actions</th>
                 </tr>
               </thead>
 
@@ -599,6 +539,37 @@ export default function ChartOfAccounts({
                         </span>
                       </td>
 
+                      {/* Actions cell */}
+                      <td className="px-5 py-3 text-center">
+                        <div className="flex items-center justify-center gap-1.5">
+                          <button
+                            onClick={() => {
+                              setEditingAccount(account);
+                              setEditName(account.name);
+                              setEditClass(account.class);
+                              setEditNormal(account.normalBalance);
+                              setEditDesc(account.description || '');
+                              setEditError(null);
+                            }}
+                            className="p-1 text-zinc-500 hover:text-blue-400 hover:bg-zinc-800/80 rounded transition-colors cursor-pointer"
+                            title={`Edit ${account.name}`}
+                          >
+                            <Edit2 className="h-3.5 w-3.5" />
+                          </button>
+                          
+                          <button
+                            onClick={() => {
+                              setDeletingId(account.id);
+                              setDeleteError(null);
+                            }}
+                            className="p-1 text-zinc-500 hover:text-red-400 hover:bg-zinc-800/80 rounded transition-colors cursor-pointer"
+                            title={`Delete ${account.name}`}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </td>
+
                     </tr>
                   );
                 })}
@@ -610,11 +581,371 @@ export default function ChartOfAccounts({
 
         {/* Counter footer */}
         <div className="bg-[#09090b] text-[10px] font-mono text-zinc-500 px-5 py-3 border-t border-zinc-800 uppercase tracking-wider flex items-center justify-between">
-          <span>Displaying {filteredAccounts.length} of {liveAccounts.length} operational accounts</span>
-          <span>Finex ERP GAAP Compliant Registry</span>
+          <span>Displaying {filteredAccounts.length} of {liveAccounts.length} accounts</span>
+          <span>Finex ERP Registry</span>
         </div>
 
       </div>
+
+      {/* ================= MODAL: ADD ACCOUNT (Part 2.1) ================= */}
+      {showAddModal && (
+        <div className="fixed inset-0 z-50 overflow-y-auto font-sans">
+          {/* Backdrop screen lock mask */}
+          <div 
+            className="fixed inset-0 bg-black/75 backdrop-blur-sm transition-opacity"
+            onClick={() => setShowAddModal(false)}
+          />
+
+          <div className="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
+            <div className="relative transform overflow-hidden rounded-lg bg-[#121214] border border-zinc-805 text-left shadow-2xl transition-all sm:my-8 sm:w-full sm:max-w-lg">
+              
+              <form onSubmit={handleAddAccountSubmit} className="space-y-4">
+                
+                {/* Modal Header */}
+                <div className="bg-[#09090b] px-6 py-4 border-b border-zinc-850 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <BookOpen className="h-5 w-5 text-blue-500" />
+                    <div>
+                      <h3 className="text-sm font-bold uppercase tracking-wider text-zinc-250">Create General Ledger Account</h3>
+                      <p className="text-[10px] text-zinc-500">Register a new customizable catalog item</p>
+                    </div>
+                  </div>
+                  <button 
+                    type="button" 
+                    onClick={() => setShowAddModal(false)}
+                    className="text-zinc-500 hover:text-white font-mono text-sm leading-none cursor-pointer"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                {/* Modal Body */}
+                <div className="px-6 py-2 space-y-4 text-xs">
+                  
+                  {/* Account Code / ID */}
+                  <div className="space-y-1.5">
+                    <label className="block text-zinc-400 font-semibold">Account Code (numeric)</label>
+                    <input
+                      type="text"
+                      placeholder="e.g., 1050, 2020, 5040"
+                      value={newId}
+                      onChange={e => setNewId(e.target.value)}
+                      className="w-full bg-[#09090b] border border-zinc-800 focus:border-zinc-705 focus:outline-none p-2 rounded text-zinc-200 font-mono"
+                    />
+                    <span className="text-[10px] text-zinc-500 block leading-normal">
+                      Must be a 4-6 digit sequence: Assets starts with 1, Liabilities with 2, Equity with 3, Revenue with 4, Expense with 5-9.
+                    </span>
+                  </div>
+
+                  {/* Account Name */}
+                  <div className="space-y-1.5">
+                    <label className="block text-zinc-400 font-semibold">Account Name</label>
+                    <input
+                      type="text"
+                      placeholder="e.g., Cash Drawer Balance, Hardware Expenses"
+                      value={newName}
+                      onChange={e => setNewName(e.target.value)}
+                      className="w-full bg-[#09090b] border border-zinc-800 focus:border-zinc-705 focus:outline-none p-2 rounded text-zinc-200 font-sans"
+                    />
+                  </div>
+
+                  {/* Class & Direction Grid */}
+                  <div className="grid grid-cols-2 gap-4">
+                    {/* Account Type/Classification */}
+                    <div className="space-y-1.5">
+                      <label className="block text-zinc-400 font-semibold">Account Type</label>
+                      <select
+                        value={newClass}
+                        onChange={e => handleClassChange(e.target.value as AccountClass)}
+                        className="w-full bg-[#09090b] border border-zinc-800 focus:border-zinc-705 focus:outline-none p-2 rounded text-zinc-200"
+                      >
+                        <option value="Asset">Asset</option>
+                        <option value="Liability">Liability</option>
+                        <option value="Equity">Equity</option>
+                        <option value="Revenue">Revenue</option>
+                        <option value="Expense">Expense</option>
+                      </select>
+                    </div>
+
+                    {/* Normal Balance direction */}
+                    <div className="space-y-1.5">
+                      <label className="block text-zinc-400 font-semibold">Normal Balance Type</label>
+                      <select
+                        value={newNormal}
+                        onChange={e => setNewNormal(e.target.value as NormalBalanceType)}
+                        className="w-full bg-[#09090b] border border-zinc-800 focus:border-zinc-705 focus:outline-none p-2 rounded text-zinc-200"
+                      >
+                        <option value="Debit">Debit</option>
+                        <option value="Credit">Credit</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Optional description */}
+                  <div className="space-y-1.5">
+                    <label className="block text-zinc-400 font-semibold">Purpose &amp; Description</label>
+                    <textarea
+                      placeholder="Traceable context describing this specific category..."
+                      value={newDesc}
+                      onChange={e => setNewDesc(e.target.value)}
+                      rows={2}
+                      className="w-full bg-[#09090b] border border-zinc-800 focus:border-zinc-705 focus:outline-none p-2 rounded text-zinc-200 font-sans resize-none"
+                    />
+                  </div>
+
+                  {/* Diagnostic warnings */}
+                  {formError && (
+                    <div className="p-3 bg-red-950/20 border border-red-900/30 text-red-400 rounded text-xs font-semibold flex items-center gap-2">
+                      <AlertTriangle className="h-4 w-4 shrink-0" />
+                      <span>{formError}</span>
+                    </div>
+                  )}
+
+                  {formSuccess && (
+                    <div className="p-3 bg-emerald-950/20 border border-emerald-900/30 text-emerald-400 rounded text-xs font-semibold flex items-center gap-2">
+                      <CheckCircle className="h-4 w-4 shrink-0" />
+                      <span>Account created successfully!</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Modal Actions */}
+                <div className="bg-[#09090b] px-6 py-4 flex justify-end gap-2 text-xs border-t border-zinc-850">
+                  <button
+                    type="button"
+                    onClick={() => setShowAddModal(false)}
+                    className="px-4 py-2 bg-zinc-900 border border-zinc-800 hover:bg-zinc-805 text-zinc-400 hover:text-white rounded transition-colors cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={savingAccount}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded font-semibold transition-colors cursor-pointer disabled:opacity-40"
+                  >
+                    {savingAccount ? 'Saving...' : 'Create Account'}
+                  </button>
+                </div>
+
+              </form>
+
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= MODAL: EDIT ACCOUNT (Part 2.2) ================= */}
+      {editingAccount && (
+        <div className="fixed inset-0 z-50 overflow-y-auto font-sans">
+          {/* Backdrop screen lock mask */}
+          <div 
+            className="fixed inset-0 bg-black/75 backdrop-blur-sm transition-opacity"
+            onClick={() => setEditingAccount(null)}
+          />
+
+          <div className="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
+            <div className="relative transform overflow-hidden rounded-lg bg-[#121214] border border-zinc-805 text-left shadow-2xl transition-all sm:my-8 sm:w-full sm:max-w-lg">
+              
+              <form onSubmit={handleEditAccountSubmit} className="space-y-4">
+                
+                {/* Modal Header */}
+                <div className="bg-[#09090b] px-6 py-4 border-b border-zinc-850 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Edit2 className="h-5 w-5 text-blue-500" />
+                    <div>
+                      <h3 className="text-sm font-bold uppercase tracking-wider text-zinc-250">Edit Account #{editingAccount.id}</h3>
+                      <p className="text-[10px] text-zinc-500">Modify accounting ledger account details</p>
+                    </div>
+                  </div>
+                  <button 
+                    type="button" 
+                    onClick={() => setEditingAccount(null)}
+                    className="text-zinc-500 hover:text-white font-mono text-sm leading-none cursor-pointer"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                {/* Modal Body */}
+                <div className="px-6 py-2 space-y-4 text-xs">
+                  
+                  {/* Account Code (READONLY) */}
+                  <div className="space-y-1.5">
+                    <label className="block text-zinc-500 font-semibold">Account Code (Read-Only)</label>
+                    <input
+                      type="text"
+                      disabled
+                      value={editingAccount.id}
+                      className="w-full bg-zinc-900 border border-zinc-800 p-2 rounded text-zinc-450 font-mono cursor-not-allowed"
+                    />
+                  </div>
+
+                  {/* Account Name */}
+                  <div className="space-y-1.5">
+                    <label className="block text-zinc-400 font-semibold">Account Name</label>
+                    <input
+                      type="text"
+                      placeholder="e.g., Main Checking, Cash Float"
+                      value={editName}
+                      onChange={e => setEditName(e.target.value)}
+                      className="w-full bg-[#09090b] border border-zinc-800 focus:border-zinc-705 focus:outline-none p-2 rounded text-zinc-200"
+                    />
+                  </div>
+
+                  {/* Class & Direction Grid */}
+                  <div className="grid grid-cols-2 gap-4">
+                    {/* Account Type/Classification */}
+                    <div className="space-y-1.5">
+                      <label className="block text-zinc-400 font-semibold">Account Type</label>
+                      <select
+                        value={editClass}
+                        onChange={e => handleEditClassChange(e.target.value as AccountClass)}
+                        className="w-full bg-[#09090b] border border-zinc-800 focus:border-zinc-705 focus:outline-none p-2 rounded text-zinc-200"
+                      >
+                        <option value="Asset">Asset</option>
+                        <option value="Liability">Liability</option>
+                        <option value="Equity">Equity</option>
+                        <option value="Revenue">Option</option>
+                        <option value="Revenue">Revenue</option>
+                        <option value="Expense">Expense</option>
+                      </select>
+                    </div>
+
+                    {/* Normal Balance direction */}
+                    <div className="space-y-1.5">
+                      <label className="block text-zinc-400 font-semibold">Normal Balance Type</label>
+                      <select
+                        value={editNormal}
+                        onChange={e => setEditNormal(e.target.value as NormalBalanceType)}
+                        className="w-full bg-[#09090b] border border-zinc-800 focus:border-zinc-705 focus:outline-none p-2 rounded text-zinc-200"
+                      >
+                        <option value="Debit">Debit</option>
+                        <option value="Credit">Credit</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* description */}
+                  <div className="space-y-1.5">
+                    <label className="block text-zinc-400 font-semibold">Purpose &amp; Description</label>
+                    <textarea
+                      placeholder="Traceable context describing this specific category..."
+                      value={editDesc}
+                      onChange={e => setEditDesc(e.target.value)}
+                      rows={2}
+                      className="w-full bg-[#09090b] border border-zinc-800 focus:border-zinc-705 focus:outline-none p-2 rounded text-zinc-200 font-sans resize-none"
+                    />
+                  </div>
+
+                  {/* Diagnostic warnings */}
+                  {editError && (
+                    <div className="p-3 bg-red-950/20 border border-red-900/30 text-red-400 rounded text-xs font-semibold flex items-center gap-2">
+                      <AlertTriangle className="h-4 w-4 shrink-0" />
+                      <span>{editError}</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Modal Actions */}
+                <div className="bg-[#09090b] px-6 py-4 flex justify-end gap-2 text-xs border-t border-zinc-850">
+                  <button
+                    type="button"
+                    onClick={() => setEditingAccount(null)}
+                    className="px-4 py-2 bg-zinc-900 border border-zinc-800 hover:bg-zinc-805 text-zinc-400 hover:text-white rounded transition-colors cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={updatingAccount}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded font-semibold transition-colors cursor-pointer disabled:opacity-40"
+                  >
+                    {updatingAccount ? 'Saving...' : 'Save Changes'}
+                  </button>
+                </div>
+
+              </form>
+
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= MODAL: CONFIRM DELETE (Part 2.2) ================= */}
+      {deletingId && (
+        <div className="fixed inset-0 z-50 overflow-y-auto font-sans">
+          {/* Backdrop screen lock mask */}
+          <div 
+            className="fixed inset-0 bg-black/75 backdrop-blur-sm transition-opacity"
+            onClick={() => setDeletingId(null)}
+          />
+
+          <div className="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
+            <div className="relative transform overflow-hidden rounded-lg bg-[#121214] border border-red-900/45 text-left shadow-2xl transition-all sm:my-8 sm:w-full sm:max-w-md">
+              
+              <div className="space-y-4">
+                
+                {/* Modal Header */}
+                <div className="bg-[#09090b] px-6 py-4 border-b border-zinc-850 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle className="h-5 w-5 text-red-500" />
+                    <div>
+                      <h3 className="text-sm font-bold uppercase tracking-wider text-red-400">Confirm Deletion</h3>
+                      <p className="text-[10px] text-zinc-500">Permanently delete account category from ledger</p>
+                    </div>
+                  </div>
+                  <button 
+                    type="button" 
+                    onClick={() => setDeletingId(null)}
+                    className="text-zinc-500 hover:text-white font-mono text-sm leading-none cursor-pointer"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                {/* Modal Body */}
+                <div className="px-6 py-2 space-y-3 text-xs leading-relaxed text-zinc-300">
+                  <p>
+                    Are you absolutely sure you want to permanently delete account general ledger category <strong className="font-mono text-white">#{deletingId}</strong>?
+                  </p>
+                  <p className="border-l-2 border-red-500/50 pl-3 py-1 bg-red-950/10 text-red-200">
+                    Warning: Delete is irreversible. If this account is already mapped inside transaction records, deletion will be blocked to preserve balanced entry data.
+                  </p>
+
+                  {/* Diagnostic warnings */}
+                  {deleteError && (
+                    <div className="p-3 bg-red-950/20 border border-red-900/30 text-red-400 rounded text-xs font-semibold flex items-center gap-2">
+                      <AlertTriangle className="h-4 w-4 shrink-0" />
+                      <span>{deleteError}</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Modal Actions */}
+                <div className="bg-[#09090b] px-6 py-4 flex justify-end gap-2 text-xs border-t border-red-950/30">
+                  <button
+                    type="button"
+                    onClick={() => setDeletingId(null)}
+                    className="px-4 py-2 bg-zinc-900 border border-zinc-800 hover:bg-zinc-805 text-zinc-400 hover:text-white rounded transition-colors cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleDeleteAccountSubmit}
+                    disabled={deletingLoading}
+                    className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded font-semibold transition-colors cursor-pointer disabled:opacity-40"
+                  >
+                    {deletingLoading ? 'Deleting...' : 'Delete Permanently'}
+                  </button>
+                </div>
+
+              </div>
+
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

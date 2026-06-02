@@ -98,24 +98,30 @@ export default function InvoicesView({ accounts, onPostSuccess, currentUserEmail
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [isIssuing, setIsIssuing] = useState<boolean>(false);
 
-  // Initialize and load saved invoices upon load
+  // Initialize and load saved invoices upon session change or load
   useEffect(() => {
     try {
-      const saved = localStorage.getItem('conexerp_saved_invoices');
+      const userId = session?.user?.id || 'guest';
+      const saved = localStorage.getItem(`conexerp_saved_invoices_${userId}`);
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
           setInvoiceHistory(parsed);
+        } else {
+          setInvoiceHistory([]);
         }
+      } else {
+        setInvoiceHistory([]);
       }
     } catch (e) {
       console.error('Error reading invoice history state:', e);
+      setInvoiceHistory([]);
     }
     
     // Auto generate next sequence Invoice Number
     const nextSeq = `INV-${Date.now().toString().slice(-4)}`;
     setInvoiceNumber(nextSeq);
-  }, []);
+  }, [session]);
 
   // Pre-requisite accounts auto setup
   useEffect(() => {
@@ -377,7 +383,8 @@ export default function InvoicesView({ accounts, onPostSuccess, currentUserEmail
 
       const updatedHistory = [newInvoice, ...invoiceHistory];
       setInvoiceHistory(updatedHistory);
-      localStorage.setItem('conexerp_saved_invoices', JSON.stringify(updatedHistory));
+      const userId = session?.user?.id || 'guest';
+      localStorage.setItem(`conexerp_saved_invoices_${userId}`, JSON.stringify(updatedHistory));
 
       // 5. Reset inputs cleanly & issue feedback
       setSuccessMsg(`Invoice ${invoiceNumber.toUpperCase()} issued successfully! Journal entry ${generatedJournalEntryId} posted behind the scenes.`);

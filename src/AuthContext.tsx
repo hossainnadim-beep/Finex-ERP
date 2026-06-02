@@ -93,8 +93,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   const loginSandbox = (email: string) => {
+    // Generate isolated user ID based on the cleaned email address
+    const cleanId = 'sand-usr-' + email.toLowerCase().replace(/[^a-z0-9]/g, '_');
     const sandboxSession: UserSession = {
-      user: { id: 'sand-usr-777', email: email },
+      user: { id: cleanId, email: email },
       mode: 'sandbox',
       supabaseConfigured: false
     };

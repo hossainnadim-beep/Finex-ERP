@@ -113,8 +113,14 @@ export default function AuditHistory() {
         .order('changed_at', { ascending: false });
 
       if (fetchErr) {
-        // If table doesn't exist yet, we guide the user to run the trigger script
-        if (fetchErr.code === '42P01') {
+        // If table doesn't exist yet, is missing from the Supabase schema cache, or isn't created in the db, we guide the user to run the trigger script and fallback gracefully
+        const isMissingErr = 
+          fetchErr.code === '42P01' || 
+          fetchErr.code === 'PGRST116' || 
+          fetchErr.message?.toLowerCase().includes('schema cache') || 
+          fetchErr.message?.toLowerCase().includes('could not find');
+
+        if (isMissingErr) {
           setIsTableMissing(true);
           loadSandboxMockLogs(); // Show mock as fallback preview
         } else {
@@ -134,9 +140,10 @@ export default function AuditHistory() {
 
   const loadSandboxMockLogs = () => {
     const sandboxEmail = session?.user?.email || 'guest-auditor@enterprise.io';
+    const userId = session?.user?.id || 'guest';
     
     // Load custom logs created in this space locally (and synced across tabs in real-time!)
-    const savedLocalDb = localStorage.getItem('conexerp_sandbox_audit_logs_db');
+    const savedLocalDb = localStorage.getItem(`conexerp_sandbox_audit_logs_db_${userId}`);
     let customLogs: DBClientAuditLog[] = [];
     if (savedLocalDb) {
       try {
