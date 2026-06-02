@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Account, JournalEntry, AuditLog } from '../types';
 import { 
   TrendingUp, 
@@ -17,8 +17,20 @@ import {
   Layers,
   CheckCircle,
   Database,
-  Calendar
+  Calendar,
+  BarChart4
 } from 'lucide-react';
+import {
+  ResponsiveContainer,
+  ComposedChart,
+  Line,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend
+} from 'recharts';
 
 interface DashboardOverviewProps {
   entries: JournalEntry[];
@@ -28,6 +40,41 @@ interface DashboardOverviewProps {
   isDbConnected: boolean;
 }
 
+interface CustomTooltipProps {
+  active?: boolean;
+  payload?: any[];
+  label?: string;
+}
+
+const CustomTooltip = ({ active, payload, label }: CustomTooltipProps) => {
+  if (active && payload && payload.length) {
+    return (
+      <div className="bg-white p-3 border border-slate-200 rounded-lg shadow-lg font-sans text-xs space-y-1">
+        <p className="font-bold text-slate-800 border-b border-slate-100 pb-1 mb-1">{label}</p>
+        {payload.map((item, idx) => (
+          <div key={idx} className="flex justify-between items-center gap-4">
+            <span className="flex items-center gap-1.5 text-slate-550 font-medium">
+              <span 
+                className="w-1.5 h-1.5 rounded-full inline-block" 
+                style={{ backgroundColor: item.color || item.fill }} 
+              />
+              {item.name}:
+            </span>
+            <span className="font-mono font-bold text-slate-900">
+              {new Intl.NumberFormat('en-US', {
+                style: 'currency',
+                currency: 'USD',
+                minimumFractionDigits: 2
+              }).format(item.value)}
+            </span>
+          </div>
+        ))}
+      </div>
+    );
+  }
+  return null;
+};
+
 export default function DashboardOverview({ 
   entries, 
   accounts, 
@@ -35,6 +82,83 @@ export default function DashboardOverview({
   onNavigate,
   isDbConnected 
 }: DashboardOverviewProps) {
+
+  const [activeTab, setActiveTab] = useState<'trends' | 'structure'>('trends');
+
+  // Dynamic trend data calculations over the last 6 months
+  const trendData = useMemo(() => {
+    const monthsRange = [];
+    const currentDate = new Date();
+    
+    // Generate last 6 months (oldest to newest)
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(currentDate.getFullYear(), currentDate.getMonth() - i, 1);
+      const monthStr = d.toLocaleString('en-US', { month: 'short' });
+      const yearStr = d.getFullYear().toString().slice(-2);
+      const rawYear = d.getFullYear();
+      const rawMonth = d.getMonth();
+      monthsRange.push({
+        label: `${monthStr} ${yearStr}`,
+        rawYear,
+        rawMonth
+      });
+    }
+
+    // Identify cash accounts for Cash Flow tracking (Assets like "Cash", "Bank", Checking etc.)
+    const cashAccountIds = accounts
+      .filter(acc => {
+        const isAsset = acc.class === 'Asset';
+        const nameLower = acc.name.toLowerCase();
+        const isCashOrBank = 
+          acc.id === '1010' ||
+          nameLower.includes('cash') ||
+          nameLower.includes('bank') ||
+          nameLower.includes('checking') ||
+          nameLower.includes('savings');
+        return isAsset && isCashOrBank;
+      })
+      .map(acc => acc.id);
+
+    // Active (non-reversed) entries
+    const activeEntries = entries.filter(e => !e.isReversed);
+
+    return monthsRange.map(m => {
+      let netCashFlowCents = 0;
+      let totalVolumeCents = 0;
+
+      activeEntries.forEach(entry => {
+        // Safe split-based parsing of YYYY-MM-DD
+        const parts = entry.date.split('-');
+        if (parts.length === 3) {
+          const entryYear = parseInt(parts[0], 10);
+          const entryMonth = parseInt(parts[1], 10) - 1; // 0-indexed
+
+          if (entryYear === m.rawYear && entryMonth === m.rawMonth) {
+            // Cash Flow calculations
+            entry.lines.forEach(line => {
+              if (cashAccountIds.includes(line.accountId)) {
+                // Debit increases cash, credit decreases it
+                netCashFlowCents += (line.debit - line.credit);
+              }
+            });
+
+            // Activity/Transaction Volume calculations
+            let entryDebitSum = 0;
+            entry.lines.forEach(line => {
+              entryDebitSum += line.debit;
+            });
+            totalVolumeCents += entryDebitSum;
+          }
+        }
+      });
+
+      return {
+        month: m.label,
+        'Net Cash Flow': parseFloat((netCashFlowCents / 100).toFixed(2)),
+        'Transaction Volume': parseFloat((totalVolumeCents / 100).toFixed(2))
+      };
+    });
+  }, [entries, accounts]);
 
   // Dynamic balance calculations for simple dashboard metrics
   const summary = useMemo(() => {
@@ -219,64 +343,163 @@ export default function DashboardOverview({
       {/* Main Grid: Data Visualization & Quick Workflows */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         
-        {/* Visual Charts: Asset & Liability Distribution (Pure-CSS High-Quality visualization) */}
-        <div className="bg-[#121214] p-5 rounded border border-zinc-800 shadow-sm lg:col-span-2 space-y-6 flex flex-col justify-between">
+        {/* Visual Charts: Comprehensive Financial Trends & Capital Structure Breakdown */}
+        <div className="bg-[#121214] p-5 rounded border border-zinc-800 shadow-sm lg:col-span-2 flex flex-col justify-between min-h-[460px]">
           <div>
-            <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-300 flex items-center gap-2">
-              <Activity className="h-4 w-4 text-blue-400" /> Capital Structure & Assets Breakdown
-            </h3>
-            <p className="text-[11px] text-zinc-500 mt-1 uppercase font-mono">Percentage volumes of balanced accounting equation</p>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-zinc-800/60 pb-3 gap-2">
+              <div>
+                <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-300 flex items-center gap-2">
+                  <BarChart4 className="h-4 w-4 text-blue-400" /> Executive Financial Cockpit
+                </h3>
+                <p className="text-[10px] text-zinc-500 mt-1 uppercase font-mono">
+                  {activeTab === 'trends' ? '6-Month Cash Inflows & Transaction Performance' : 'Dynamic balance weight of accounting equation'}
+                </p>
+              </div>
+
+              {/* Tab Toggles */}
+              <div className="flex bg-[#09090b] p-0.5 rounded border border-zinc-800 text-[10px] uppercase font-mono self-start sm:self-auto">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('trends')}
+                  className={`px-2.5 py-1 rounded transition-all cursor-pointer font-semibold ${
+                    activeTab === 'trends'
+                      ? 'bg-zinc-800 text-zinc-100 shadow-sm'
+                      : 'text-zinc-500 hover:text-zinc-300'
+                  }`}
+                >
+                  Trends (Recharts)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('structure')}
+                  className={`px-2.5 py-1 rounded transition-all cursor-pointer font-semibold ${
+                    activeTab === 'structure'
+                      ? 'bg-zinc-800 text-zinc-100 shadow-sm'
+                      : 'text-zinc-500 hover:text-zinc-300'
+                  }`}
+                >
+                  Capital Structure
+                </button>
+              </div>
+            </div>
           </div>
 
-          <div className="space-y-4 my-4">
-            
-            {/* Visual stacked ledger progress line */}
-            <div className="space-y-1.5Packed font-sans">
-              <div className="flex justify-between text-xs text-zinc-400">
-                <span>Asset Coverage vs. Claims</span>
-                <span>{assetPercentage}% Assets</span>
+          <div className="my-auto py-4">
+            {activeTab === 'trends' ? (
+              <div className="w-full h-[280px] font-sans antialiased text-xs" id="trends-chart-wrapper">
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart data={trendData} margin={{ top: 10, right: 5, left: -20, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+                    <XAxis 
+                      dataKey="month" 
+                      stroke="#64748b" 
+                      fontSize={10} 
+                      tickLine={false} 
+                      axisLine={false} 
+                      dy={8}
+                    />
+                    <YAxis 
+                      yAxisId="left"
+                      stroke="#007cbd" 
+                      fontSize={10} 
+                      tickLine={false} 
+                      axisLine={false} 
+                      dx={-4}
+                      tickFormatter={(v) => `$${v.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
+                    />
+                    <YAxis 
+                      yAxisId="right"
+                      orientation="right"
+                      stroke="#64748b" 
+                      fontSize={10} 
+                      tickLine={false} 
+                      axisLine={false} 
+                      dx={4}
+                      tickFormatter={(v) => `$${v.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
+                    />
+                    <Tooltip content={<CustomTooltip />} />
+                    <Legend 
+                      verticalAlign="top" 
+                      height={32} 
+                      iconType="circle" 
+                      iconSize={6}
+                      wrapperStyle={{ fontSize: '10px', fontFamily: 'Inter, sans-serif', paddingBottom: '12px' }}
+                    />
+                    <Bar 
+                      yAxisId="right"
+                      dataKey="Transaction Volume" 
+                      fill="#cbd5e1" 
+                      radius={[4, 4, 0, 0]} 
+                      barSize={24}
+                      name="Transaction Volume"
+                    />
+                    <Line 
+                      yAxisId="left"
+                      type="monotone" 
+                      dataKey="Net Cash Flow" 
+                      stroke="#007cbd" 
+                      strokeWidth={2} 
+                      dot={{ r: 3, strokeWidth: 1, fill: '#007cbd' }}
+                      activeDot={{ r: 5 }}
+                      name="Net Cash Flow"
+                    />
+                  </ComposedChart>
+                </ResponsiveContainer>
               </div>
-              <div className="w-full h-3 bg-zinc-900 rounded overflow-hidden flex border border-zinc-800">
-                <div style={{ width: `${Math.max(10, assetPercentage)}%` }} className="bg-blue-600 h-full transition-all duration-500" title="Assets percentage of aggregate ledger" />
-                <div style={{ width: `${Math.max(5, liabilityPercentage)}%` }} className="bg-amber-500 h-full transition-all duration-500" title="Claims (Liabilities) percentage" />
-                <div style={{ width: `${Math.max(5, equityPercentage)}%` }} className="bg-emerald-600 h-full transition-all duration-500" title="Shareholder Equity percentage" />
-              </div>
-            </div>
-
-            {/* Structured Ratio Rows */}
-            <div className="grid grid-cols-3 gap-4 pt-3 text-center border-t border-zinc-850">
-              <div className="space-y-1">
-                <div className="flex items-center justify-center gap-1.5 text-[10px] uppercase font-bold text-zinc-400">
-                  <span className="w-1.5 h-1.5 rounded-full bg-blue-600" />
-                  <span>Assets</span>
+            ) : (
+              <div className="space-y-6 py-6" id="structure-balance-view">
+                {/* Visual stacked ledger progress line */}
+                <div className="space-y-2 font-sans">
+                  <div className="flex justify-between text-xs text-zinc-405">
+                    <span>Asset Coverage vs. Claims</span>
+                    <span className="font-semibold text-blue-500">{assetPercentage}% Assets</span>
+                  </div>
+                  <div className="w-full h-3 bg-zinc-900 rounded overflow-hidden flex border border-zinc-800">
+                    <div style={{ width: `${Math.max(10, assetPercentage)}%` }} className="bg-blue-600 h-full transition-all duration-500" title="Assets percentage of aggregate ledger" />
+                    <div style={{ width: `${Math.max(5, liabilityPercentage)}%` }} className="bg-amber-500 h-full transition-all duration-500" title="Claims (Liabilities) percentage" />
+                    <div style={{ width: `${Math.max(5, equityPercentage)}%` }} className="bg-emerald-600 h-full transition-all duration-500" title="Shareholder Equity percentage" />
+                  </div>
                 </div>
-                <div className="text-xs font-mono font-bold text-zinc-200">{formatCurrency(summary.totalAssets)}</div>
-                <div className="text-[9px] text-zinc-500 font-mono">Ratio {assetPercentage}%</div>
-              </div>
 
-              <div className="space-y-1">
-                <div className="flex items-center justify-center gap-1.5 text-[10px] uppercase font-bold text-zinc-400">
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-550" />
-                  <span>Liabilities</span>
+                {/* Structured Ratio Rows */}
+                <div className="grid grid-cols-3 gap-4 pt-4 text-center border-t border-zinc-800">
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-center gap-1.5 text-[10px] uppercase font-bold text-zinc-400">
+                      <span className="w-1.5 h-1.5 rounded-full bg-blue-600" />
+                      <span>Assets</span>
+                    </div>
+                    <div className="text-xs font-mono font-bold text-zinc-200">{formatCurrency(summary.totalAssets)}</div>
+                    <div className="text-[9px] text-zinc-505 font-mono">Ratio {assetPercentage}%</div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-center gap-1.5 text-[10px] uppercase font-bold text-zinc-405">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-550" />
+                      <span>Liabilities</span>
+                    </div>
+                    <div className="text-xs font-mono font-bold text-zinc-200">{formatCurrency(summary.totalLiabilities)}</div>
+                    <div className="text-[9px] text-zinc-505 font-mono">Ratio {liabilityPercentage}%</div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-center gap-1.5 text-[10px] uppercase font-bold text-zinc-405">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-600" />
+                      <span>Equity</span>
+                    </div>
+                    <div className="text-xs font-mono font-bold text-zinc-200">{formatCurrency(summary.totalEquity)}</div>
+                    <div className="text-[9px] text-zinc-505 font-mono">Ratio {equityPercentage}%</div>
+                  </div>
                 </div>
-                <div className="text-xs font-mono font-bold text-zinc-200">{formatCurrency(summary.totalLiabilities)}</div>
-                <div className="text-[9px] text-zinc-500 font-mono">Ratio {liabilityPercentage}%</div>
               </div>
-
-              <div className="space-y-1">
-                <div className="flex items-center justify-center gap-1.5 text-[10px] uppercase font-bold text-zinc-400">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-600" />
-                  <span>Equity</span>
-                </div>
-                <div className="text-xs font-mono font-bold text-zinc-200">{formatCurrency(summary.totalEquity)}</div>
-                <div className="text-[9px] text-zinc-500 font-mono">Ratio {equityPercentage}%</div>
-              </div>
-            </div>
-
+            )}
           </div>
 
           <div className="p-3 bg-zinc-950/45 border border-zinc-850 rounded text-xs text-zinc-400 leading-relaxed font-sans mt-2">
-            The fundamental accounting equation states that <strong>Assets = Liabilities + Equity</strong>. Every transactional entry must have credit and debit totals equal to satisfy this equation dynamically.
+            {activeTab === 'trends' ? (
+              <span>This live trend gauge monitors liquid cash flow indicators and aggregated accounting event values. Transaction Volume maps out base business activities, while Net Cash Flow outlines positive/negative liquid asset movements.</span>
+            ) : (
+              <span>The fundamental accounting equation states that <strong>Assets = Liabilities + Equity</strong>. Every transactional entry must have credit and debit totals equal to satisfy this equation dynamically.</span>
+            )}
           </div>
         </div>
 
