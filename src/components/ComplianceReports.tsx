@@ -109,6 +109,11 @@ export default function ComplianceReports({ accounts, entries, session }: Compli
     }).format(cents / 100);
   };
 
+  const [printLayout, setPrintLayout] = useState<'grid' | 'classic'>('grid');
+  const [includeSignatures, setIncludeSignatures] = useState<boolean>(true);
+  const [includeNotes, setIncludeNotes] = useState<boolean>(true);
+  const [pageBreakBetween, setPageBreakBetween] = useState<boolean>(false);
+
   const handlePrint = () => {
     window.print();
   };
@@ -117,7 +122,7 @@ export default function ComplianceReports({ accounts, entries, session }: Compli
     <div className="space-y-6">
       
       {/* Tab select & printable controls */}
-      <div className="bg-[#121214] rounded border border-zinc-800 p-4 shadow-sm flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+      <div className="bg-[#121214] rounded border border-zinc-800 p-4 shadow-sm flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 select-none">
         
         <div className="flex items-center gap-2">
           <BarChart3 className="h-4.5 w-4.5 text-blue-500" />
@@ -161,6 +166,69 @@ export default function ComplianceReports({ accounts, entries, session }: Compli
           </button>
         </div>
 
+      </div>
+
+      {/* Interactive Print Options Configuration Dashboard Panel (Hidden during Print) */}
+      <div className="bg-[#121214] border border-zinc-800 rounded-lg p-5 shadow-md flex flex-col gap-4 print:hidden animate-fade-in">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-zinc-850 pb-2.5 gap-2">
+          <div className="flex items-center gap-2">
+            <Activity className="h-4 w-4 text-emerald-500" />
+            <span className="text-xs font-bold uppercase tracking-wider text-zinc-200">GAAP Statement Print &amp; Pagination Setup</span>
+          </div>
+          <span className="text-[10px] font-mono text-zinc-500 uppercase">Live config previews dynamically below</span>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs">
+          {/* Layout Presentation */}
+          <div className="flex flex-col gap-1.5">
+            <span className="text-zinc-400 font-semibold uppercase tracking-wider text-[10px]">Print Layout Presentation</span>
+            <select
+              value={printLayout}
+              onChange={(e) => setPrintLayout(e.target.value as 'grid' | 'classic')}
+              className="bg-zinc-950 border border-zinc-850 text-zinc-200 rounded p-2 text-xs font-sans w-full cursor-pointer focus:border-blue-500 focus:outline-none focus:ring-0"
+            >
+              <option value="classic">Standard Vertical (Recommended for PDF / Paper)</option>
+              <option value="grid">Side-by-Side Dual Column (Widescreen)</option>
+            </select>
+          </div>
+
+          {/* Setup toggles */}
+          <div className="flex items-center">
+            <label className="flex items-center gap-2.5 text-zinc-300 hover:text-zinc-100 cursor-pointer select-none transition-colors">
+              <input
+                type="checkbox"
+                checked={includeSignatures}
+                onChange={(e) => setIncludeSignatures(e.target.checked)}
+                className="rounded text-blue-500 bg-zinc-900 border-zinc-800 h-4 w-4 cursor-pointer focus:ring-0"
+              />
+              <span>Include Auditor Signoffs</span>
+            </label>
+          </div>
+
+          <div className="flex items-center">
+            <label className="flex items-center gap-2.5 text-zinc-300 hover:text-zinc-100 cursor-pointer select-none transition-colors">
+              <input
+                type="checkbox"
+                checked={includeNotes}
+                onChange={(e) => setIncludeNotes(e.target.checked)}
+                className="rounded text-blue-500 bg-zinc-900 border-zinc-800 h-4 w-4 cursor-pointer focus:ring-0"
+              />
+              <span>Include Disclosures Notes</span>
+            </label>
+          </div>
+
+          <div className="flex items-center">
+            <label className="flex items-center gap-2.5 text-zinc-300 hover:text-zinc-100 cursor-pointer select-none transition-colors" title="Splits Assets and Liabilities into separate pages for physical sheets alignment">
+              <input
+                type="checkbox"
+                checked={pageBreakBetween}
+                onChange={(e) => setPageBreakBetween(e.target.checked)}
+                className="rounded text-blue-500 bg-zinc-900 border-zinc-800 h-4 w-4 cursor-pointer focus:ring-0"
+              />
+              <span>Force Page-Break Pagination</span>
+            </label>
+          </div>
+        </div>
       </div>
 
       <div className="bg-[#121214] border border-zinc-800 rounded-lg p-6 shadow-xl space-y-6 print:bg-white print:text-black font-sans">
@@ -209,10 +277,10 @@ export default function ComplianceReports({ accounts, entries, session }: Compli
               </div>
             )}
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 pt-2">
+            <div className={`${printLayout === 'classic' ? 'space-y-8 max-w-2xl mx-auto' : 'grid grid-cols-1 md:grid-cols-2 gap-8'} pt-2`}>
               
               {/* Left Side: ASSETS */}
-              <div className="space-y-4">
+              <div className="space-y-4 print-break-inside-avoid page-break-avoid">
                 <h4 className="text-[10px] uppercase tracking-wider text-zinc-500 font-bold border-b border-zinc-800 print:border-zinc-300 pb-2 flex justify-between">
                   <span>Current Enterprise Assets</span>
                   <span>debit items</span>
@@ -243,8 +311,13 @@ export default function ComplianceReports({ accounts, entries, session }: Compli
                 </div>
               </div>
 
+              {/* Classic Layout Divider & Optional Page Break Spacer */}
+              {printLayout === 'classic' && (
+                <div className={`print-hidden border-t border-dashed border-zinc-800/40 my-4 ${pageBreakBetween ? 'print-break-before-always page-break-always' : ''}`} />
+              )}
+
               {/* Right Side: LIABILITIES & EQUITY */}
-              <div className="space-y-6">
+              <div className={`space-y-6 print-break-inside-avoid page-break-avoid ${pageBreakBetween && printLayout !== 'classic' ? 'print-break-before-always page-break-always' : ''}`}>
                 
                 {/* LIABILITIES Category */}
                 <div className="space-y-4">
@@ -321,7 +394,7 @@ export default function ComplianceReports({ accounts, entries, session }: Compli
                 {/* Combined Liabilities & Equity matching block */}
                 <div className="pt-3 border-t-2 border-zinc-800 print:border-zinc-900 flex justify-between items-center font-bold text-xs text-zinc-200 print:text-zinc-900 uppercase tracking-wide bg-zinc-950/20 print:bg-zinc-50 p-3.5 rounded">
                   <span>Liabilities + Shareholders Equity</span>
-                  <span className="font-mono text-blue-400 print:text-blue-700 underline decoration-double decoration-2 text-sm">{formatCurrency(summary.totalLiabilities + summary.finalEquityIncludingNetIncome)}</span>
+                  <span className="font-mono text-blue-400 print:text-blue-700 underline decoration-double decoration-2 text-sm text-[12px] print:print-double-underline">{formatCurrency(summary.totalLiabilities + summary.finalEquityIncludingNetIncome)}</span>
                 </div>
 
               </div>
@@ -406,6 +479,36 @@ export default function ComplianceReports({ accounts, entries, session }: Compli
               </span>
             </div>
 
+          </div>
+        )}
+
+        {/* Dynamic Footnotes & Disclosures for GAAP Compliance */}
+        {includeNotes && (
+          <div className="border-t border-zinc-850 print:border-zinc-300 pt-6 mt-8 print-break-inside-avoid page-break-avoid font-sans text-xs text-zinc-400 print:text-slate-700 block">
+            <h4 className="text-[10px] uppercase tracking-wider font-bold text-zinc-300 print:text-slate-900 mb-2">Disclosures &amp; Explanatory Accounting Notes</h4>
+            <ol className="list-decimal list-inside space-y-1.5 leading-relaxed text-[11px]">
+              <li><strong>GAAP Metric Standardization:</strong> These dynamic statements are extracted directly from active general ledger aggregates and standardized on the accrual basis of US GAAP.</li>
+              <li><strong>Accruals and Adjustments:</strong> Accounts reflect real-time ledger updates and active double-entry balancing. Reporting compiled at {new Date().toISOString().replace('T', ' ').slice(0, 19)} UTC.</li>
+              <li><strong>Shareholder Equity Integrity:</strong> Strategic balance equity matches operational assets and liability obligations perfectly during system-verified active sessions.</li>
+            </ol>
+          </div>
+        )}
+
+        {/* Dynamic Sign-Off Signatures Block */}
+        {includeSignatures && (
+          <div className="border-t border-zinc-850 print:border-zinc-300 pt-8 mt-10 print-break-inside-avoid page-break-avoid block">
+            <div className="grid grid-cols-2 gap-8 text-xs font-sans pt-4">
+              <div className="text-center">
+                <div className="border-b border-zinc-800 print:border-zinc-400 h-10 w-48 mx-auto" />
+                <span className="block text-[10px] text-zinc-500 print:text-slate-600 uppercase tracking-wider mt-2 font-semibold">Authorized Audit Officer (CFO)</span>
+                <span className="block text-[9px] text-zinc-600 print:text-slate-400 font-mono">Finex Enterprise Authority</span>
+              </div>
+              <div className="text-center">
+                <div className="border-b border-zinc-800 print:border-zinc-400 h-10 w-48 mx-auto" />
+                <span className="block text-[10px] text-zinc-500 print:text-slate-600 uppercase tracking-wider mt-2 font-semibold">Principal Assurance Representative</span>
+                <span className="block text-[9px] text-zinc-600 print:text-slate-400 font-mono">Governed Review Assurances</span>
+              </div>
+            </div>
           </div>
         )}
 
