@@ -5,8 +5,8 @@
 
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = ((import.meta as any).env?.VITE_SUPABASE_URL as string) || '';
-const supabaseAnonKey = ((import.meta as any).env?.VITE_SUPABASE_ANON_KEY as string) || '';
+const supabaseUrl = ((import.meta as any).env?.VITE_SUPABASE_URL as string) || 'https://poaakjzbshdekjfvttve.supabase.co';
+const supabaseAnonKey = ((import.meta as any).env?.VITE_SUPABASE_ANON_KEY as string) || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBvYWFranpic2hkZWtqZnZ0dHZlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAwNzg4NDEsImV4cCI6MjA5NTY1NDg0MX0.vjoa5k-yZaYT3LspDooQMZOQKhTWCaafWgHeR0Yluvs';
 
 // Determine if Supabase has been properly configured in the environment
 export const isSupabaseConfigured = 

@@ -21,7 +21,7 @@ export default function ConnectivityStatus() {
   };
 
   const copyConfigSnippet = () => {
-    const snippet = `VITE_SUPABASE_URL="https://your-project-id.supabase.co"\nVITE_SUPABASE_ANON_KEY="your-anon-public-key"`;
+    const snippet = `VITE_SUPABASE_URL="https://poaakjzbshdekjfvttve.supabase.co"\nVITE_SUPABASE_ANON_KEY="your-anon-public-key"`;
     navigator.clipboard.writeText(snippet);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -110,8 +110,8 @@ export default function ConnectivityStatus() {
 
           {/* Copyable snippet tool */}
           <div className="bg-[#09090b] border border-zinc-800 p-4 rounded flex items-center justify-between gap-3">
-            <div className="font-mono text-[10px] text-zinc-500 leading-relaxed truncate">
-              <div>VITE_SUPABASE_URL="https://your-project-id.supabase.co"</div>
+            <div className="font-mono text-[10px] text-zinc-400 leading-relaxed truncate">
+              <div>VITE_SUPABASE_URL="https://poaakjzbshdekjfvttve.supabase.co"</div>
               <div className="mt-1">VITE_SUPABASE_ANON_KEY="your-anon-public-key"</div>
             </div>
 
