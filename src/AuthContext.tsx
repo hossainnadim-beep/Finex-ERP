@@ -15,7 +15,8 @@ interface AuthContextType {
   supabase: typeof supabase;
   isSupabaseConfigured: boolean;
   loading: boolean;
-  loginSandbox: (email: string) => void;
+  isPasswordRecovery: boolean;
+  setIsPasswordRecovery: (isRecovery: boolean) => void;
   logout: () => Promise<void>;
   setSession: React.Dispatch<React.SetStateAction<UserSession | null>>;
 }
@@ -27,9 +28,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<{ id: string; email: string } | null>(null);
   const [supabaseSession, setSupabaseSession] = useState<any>(null);
   const [loading, setLoading] = useState<boolean>(true);
+  const [isPasswordRecovery, setIsPasswordRecovery] = useState<boolean>(false);
 
   useEffect(() => {
     let authSubscription: { unsubscribe: () => void } | null = null;
+
+    // Check if current URL contains recovery hash from password reset link
+    if (window.location.hash && (window.location.hash.includes('type=recovery') || window.location.hash.includes('access_token'))) {
+      setIsPasswordRecovery(true);
+    }
 
     const initAuth = async () => {
       if (isSupabaseConfigured && supabase) {
@@ -56,6 +63,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
 
         const { data: { subscription } } = supabase.auth.onAuthStateChange((event, currentSession) => {
+          if (event === 'PASSWORD_RECOVERY') {
+            setIsPasswordRecovery(true);
+          }
+
           if (currentSession?.user) {
             const userSession: UserSession = {
               user: {
@@ -72,9 +83,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             });
             setSupabaseSession(currentSession);
           } else if (event === 'SIGNED_OUT') {
-            // Safe-guard to only clear if in supabase mode (retains active simulator sandbox state)
-            setSession((prev) => (prev?.mode === 'supabase' ? null : prev));
-            setUser((prev) => (prev && session?.mode === 'supabase' ? null : prev));
+            setSession(null);
+            setUser(null);
             setSupabaseSession(null);
           }
         });
@@ -92,21 +102,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, []);
 
-  const loginSandbox = (email: string) => {
-    // Generate isolated user ID based on the cleaned email address
-    const cleanId = 'sand-usr-' + email.toLowerCase().replace(/[^a-z0-9]/g, '_');
-    const sandboxSession: UserSession = {
-      user: { id: cleanId, email: email },
-      mode: 'sandbox',
-      supabaseConfigured: false
-    };
-    setSession(sandboxSession);
-    setUser(sandboxSession.user);
-    setSupabaseSession(null);
-  };
-
   const logout = async () => {
-    if (session?.mode === 'supabase' && supabase) {
+    if (supabase) {
       try {
         await supabase.auth.signOut();
       } catch (err) {
@@ -116,6 +113,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setSession(null);
     setUser(null);
     setSupabaseSession(null);
+    setIsPasswordRecovery(false);
   };
 
   return (
@@ -126,7 +124,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       supabase,
       isSupabaseConfigured,
       loading,
-      loginSandbox,
+      isPasswordRecovery,
+      setIsPasswordRecovery,
       logout,
       setSession
     }}>

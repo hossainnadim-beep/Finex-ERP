@@ -3,56 +3,81 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { supabase, isSupabaseConfigured } from '../supabaseClient';
-import { Shield, Sparkles, AlertCircle, CheckCircle2, Lock, Mail, Server, Info, ArrowRight } from 'lucide-react';
+import { 
+  AlertCircle, 
+  CheckCircle2, 
+  Lock, 
+  Mail, 
+  ArrowRight, 
+  KeyRound, 
+  HelpCircle, 
+  ArrowLeft,
+  UserCheck,
+  Check
+} from 'lucide-react';
 import { UserSession } from '../types';
+import { useAuth } from '../AuthContext';
 
 interface SupabaseAuthProps {
   onLoginSuccess: (session: UserSession) => void;
   statusMessage?: string;
 }
 
+type AuthView = 'signin' | 'signup' | 'forgot-password' | 'forgot-id' | 'update-password' | 'verify-code';
+
 export default function SupabaseAuth({ onLoginSuccess }: SupabaseAuthProps) {
-  const [isSignUp, setIsSignUp] = useState<boolean>(false);
-  const [authMode, setAuthMode] = useState<'cloud' | 'sandbox'>('cloud');
+  const { isPasswordRecovery, setIsPasswordRecovery } = useAuth();
+
+  const [view, setView] = useState<AuthView>(isPasswordRecovery ? 'update-password' : 'signin');
   const [email, setEmail] = useState<string>('');
   const [password, setPassword] = useState<string>('');
+  const [confirmPassword, setConfirmPassword] = useState<string>('');
+  const [newPassword, setNewPassword] = useState<string>('');
+  
+  // Verification code / token / link paste
+  const [otpToken, setOtpToken] = useState<string>('');
+  const [pastedLink, setPastedLink] = useState<string>('');
+
+  // ID recovery lookup query state
+  const [recoveryName, setRecoveryName] = useState<string>('');
+  const [recoveryDomain, setRecoveryDomain] = useState<string>('enterprise.io');
+  const [idLookupResult, setIdLookupResult] = useState<string | null>(null);
+
   const [loading, setLoading] = useState<boolean>(false);
   const [notification, setNotification] = useState<{ 
-    type: 'success' | 'error' | 'warning'; 
+    type: 'success' | 'error' | 'info'; 
     message: string;
-    isNetworkFailure?: boolean;
   } | null>(null);
-  const [showForgotModal, setShowForgotModal] = useState<boolean>(false);
 
-  const handleSandboxLogin = (targetEmail?: string) => {
-    const emailToUse = targetEmail || email || 'architect@enterprise.io';
-    const pwdToUse = password || 'corporate-password';
-
-    if (!emailToUse) {
+  // Synchronize view if password recovery mode is detected in URL hash
+  useEffect(() => {
+    if (isPasswordRecovery) {
+      setView('update-password');
       setNotification({
-        type: 'error',
-        message: 'Please provide an email address to continue.'
+        type: 'info',
+        message: 'Password recovery session detected. Please enter your new password below.'
       });
-      return;
     }
+  }, [isPasswordRecovery]);
 
-    setLoading(true);
+  // Clear messages when changing views
+  const switchView = (newView: AuthView) => {
+    setView(newView);
     setNotification(null);
-
-    setTimeout(() => {
-      setLoading(false);
-      const cleanId = 'sand-usr-' + emailToUse.toLowerCase().replace(/[^a-z0-9]/g, '_');
-      onLoginSuccess({
-        user: { id: cleanId, email: emailToUse },
-        mode: 'sandbox',
-        supabaseConfigured: false
-      });
-    }, 600);
+    setIdLookupResult(null);
+    setPassword('');
+    setConfirmPassword('');
+    setNewPassword('');
+    setOtpToken('');
+    setPastedLink('');
   };
 
-  const handleAuth = async (e: React.FormEvent) => {
+  /**
+   * Handle user sign in with registered credentials
+   */
+  const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
     setNotification(null);
 
@@ -60,121 +85,475 @@ export default function SupabaseAuth({ onLoginSuccess }: SupabaseAuthProps) {
     if (!emailTrimmed || !password) {
       setNotification({
         type: 'error',
-        message: 'Please enter both your email address and password key.'
+        message: 'Please enter both your registered Email ID and password key.'
       });
       return;
     }
 
-    // If explicitly set to sandbox mode or Supabase is not configured, login via sandbox
-    if (authMode === 'sandbox' || !isSupabaseConfigured || !supabase) {
-      handleSandboxLogin(emailTrimmed);
+    if (!isSupabaseConfigured || !supabase) {
+      setNotification({
+        type: 'error',
+        message: 'Supabase credentials are not configured. Please ensure VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are set.'
+      });
       return;
     }
 
     setLoading(true);
     try {
-      if (isSignUp) {
-        // Set a timeout to prevent hanging on unreachable cloud backends
-        const timeoutPromise = new Promise<{ data: any; error: any }>((_, reject) =>
-          setTimeout(() => reject(new Error('Connection timed out. Remote database is unreachable.')), 5000)
-        );
+      const timeoutPromise = new Promise<{ data: any; error: any }>((_, reject) =>
+        setTimeout(() => reject(new Error('Connection timed out. Remote authentication server is not responding.')), 7000)
+      );
 
-        const signUpPromise = supabase.auth.signUp({
-          email: emailTrimmed,
-          password,
-          options: {
-            emailRedirectTo: window.location.origin,
-          }
-        });
+      const signInPromise = supabase.auth.signInWithPassword({
+        email: emailTrimmed,
+        password: password,
+      });
 
-        const { data, error } = await Promise.race([signUpPromise, timeoutPromise]) as any;
+      const { data, error } = await Promise.race([signInPromise, timeoutPromise]) as any;
 
-        if (error) throw error;
-
-        if (data?.user && !data?.session) {
-          setNotification({
-            type: 'success',
-            message: 'Account registered! Please check your email inbox to confirm your registration.'
-          });
-        } else if (data?.session) {
-          setNotification({
-            type: 'success',
-            message: 'Account successfully registered and signed in!'
-          });
-          setTimeout(() => {
-            onLoginSuccess({
-              user: { id: data.user?.id || 'id', email: data.user?.email || emailTrimmed },
-              mode: 'supabase',
-              supabaseConfigured: true
-            });
-          }, 800);
-        }
-      } else {
-        // Sign in with password with a timeout to catch unreachable endpoints quickly
-        const timeoutPromise = new Promise<{ data: any; error: any }>((_, reject) =>
-          setTimeout(() => reject(new Error('Connection timed out. Remote database is unreachable.')), 5000)
-        );
-
-        const signInPromise = supabase.auth.signInWithPassword({
-          email: emailTrimmed,
-          password,
-        });
-
-        const { data, error } = await Promise.race([signInPromise, timeoutPromise]) as any;
-
-        if (error) throw error;
-
-        setNotification({
-          type: 'success',
-          message: 'Authenticated successfully! Initializing ledger...'
-        });
-        
-        setTimeout(() => {
-          onLoginSuccess({
-            user: { id: data.user?.id || 'id', email: data.user?.email || emailTrimmed },
-            mode: 'supabase',
-            supabaseConfigured: true
-          });
-        }, 800);
+      if (error) {
+        throw error;
       }
+
+      if (!data?.user) {
+        throw new Error('Authentication succeeded but no user account details were returned.');
+      }
+
+      setNotification({
+        type: 'success',
+        message: 'Authenticated successfully. Initializing financial ledger console...'
+      });
+
+      setTimeout(() => {
+        onLoginSuccess({
+          user: { 
+            id: data.user.id, 
+            email: data.user.email || emailTrimmed 
+          },
+          mode: 'supabase',
+          supabaseConfigured: true
+        });
+      }, 600);
+
     } catch (err: any) {
-      const errMsg = err?.message || 'An error occurred during authentication.';
-      const isNetworkIssue = 
-        errMsg.toLowerCase().includes('failed to fetch') ||
-        errMsg.toLowerCase().includes('network') ||
-        errMsg.toLowerCase().includes('timed out') ||
-        errMsg.toLowerCase().includes('unreachable') ||
-        errMsg.toLowerCase().includes('fetch failed') ||
-        err?.name === 'TypeError';
-
-      if (isNetworkIssue) {
-        setNotification({
-          type: 'error',
-          isNetworkFailure: true,
-          message: 'Remote cloud database is currently unreachable (Failed to fetch). You can enter instantly in Enterprise Sandbox / Demo mode with your account credentials.'
-        });
-      } else {
-        setNotification({
-          type: 'error',
-          isNetworkFailure: false,
-          message: errMsg
-        });
+      const rawMessage = err?.message || 'Failed to authenticate.';
+      
+      let userFriendlyMessage = rawMessage;
+      if (rawMessage.toLowerCase().includes('invalid login credentials')) {
+        userFriendlyMessage = 'Invalid login credentials. Please verify your registered email ID and password, or use the recovery options below.';
+      } else if (rawMessage.toLowerCase().includes('email not confirmed')) {
+        userFriendlyMessage = 'Email address not yet confirmed. Please verify your email inbox or disable "Confirm email" in your Supabase Auth settings.';
+      } else if (rawMessage.toLowerCase().includes('failed to fetch') || rawMessage.toLowerCase().includes('network')) {
+        userFriendlyMessage = 'Unable to reach the authentication server. Please check your internet connection and Supabase project status.';
       }
+
+      setNotification({
+        type: 'error',
+        message: userFriendlyMessage
+      });
     } finally {
       setLoading(false);
     }
   };
 
+  /**
+   * Handle registration of a new registered user ID
+   */
+  const handleSignUp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setNotification(null);
+
+    const emailTrimmed = email.trim();
+    if (!emailTrimmed || !password) {
+      setNotification({
+        type: 'error',
+        message: 'Please enter both an Email ID and a password.'
+      });
+      return;
+    }
+
+    if (password.length < 6) {
+      setNotification({
+        type: 'error',
+        message: 'Password key must be at least 6 characters in length.'
+      });
+      return;
+    }
+
+    if (!isSupabaseConfigured || !supabase) {
+      setNotification({
+        type: 'error',
+        message: 'Supabase authentication service is not configured.'
+      });
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const timeoutPromise = new Promise<{ data: any; error: any }>((_, reject) =>
+        setTimeout(() => reject(new Error('Connection timed out. Remote authentication server is not responding.')), 7000)
+      );
+
+      const signUpPromise = supabase.auth.signUp({
+        email: emailTrimmed,
+        password: password,
+        options: {
+          emailRedirectTo: window.location.origin,
+        }
+      });
+
+      const { data, error } = await Promise.race([signUpPromise, timeoutPromise]) as any;
+
+      if (error) {
+        throw error;
+      }
+
+      if (data?.user && !data?.session) {
+        setNotification({
+          type: 'success',
+          message: 'Registration successful! A verification email has been dispatched. Please confirm your email to sign in (or turn off email confirmation in Supabase for instant logins).'
+        });
+      } else if (data?.session) {
+        setNotification({
+          type: 'success',
+          message: 'Account registered and authenticated successfully!'
+        });
+        setTimeout(() => {
+          onLoginSuccess({
+            user: { 
+              id: data.user.id, 
+              email: data.user.email || emailTrimmed 
+            },
+            mode: 'supabase',
+            supabaseConfigured: true
+          });
+        }, 700);
+      }
+    } catch (err: any) {
+      setNotification({
+        type: 'error',
+        message: err?.message || 'Registration failed. Please try a different email ID.'
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /**
+   * Handle sending password reset email via Supabase Auth
+   */
+  const handleForgotPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setNotification(null);
+
+    const emailTrimmed = email.trim();
+    if (!emailTrimmed) {
+      setNotification({
+        type: 'error',
+        message: 'Please provide your registered Email ID.'
+      });
+      return;
+    }
+
+    if (!isSupabaseConfigured || !supabase) {
+      setNotification({
+        type: 'error',
+        message: 'Supabase auth backend is not configured.'
+      });
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const redirectUrl = window.location.origin;
+      const { error } = await supabase.auth.resetPasswordForEmail(emailTrimmed, {
+        redirectTo: redirectUrl,
+      });
+
+      if (error) {
+        throw error;
+      }
+
+      setNotification({
+        type: 'success',
+        message: `Password reset email dispatched to ${emailTrimmed}. If clicking the email link opens a "Page not found" error, you can copy the link/code and use the "Enter Code / Paste Link" tab below!`
+      });
+    } catch (err: any) {
+      setNotification({
+        type: 'error',
+        message: err?.message || 'Failed to dispatch password reset request. Please verify your email format.'
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /**
+   * Handle verifying OTP code or pasted reset link directly in app
+   */
+  const handleVerifyOtpOrLink = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setNotification(null);
+
+    if (!supabase) {
+      setNotification({ type: 'error', message: 'Supabase client is not available.' });
+      return;
+    }
+
+    const emailTrimmed = email.trim();
+    const tokenInput = otpToken.trim();
+    const linkInput = pastedLink.trim();
+
+    if (!tokenInput && !linkInput) {
+      setNotification({
+        type: 'error',
+        message: 'Please enter the 6-digit code OR paste the reset link from your email.'
+      });
+      return;
+    }
+
+    setLoading(true);
+    try {
+      // If user pasted a link, parse token / access_token / token_hash from it
+      if (linkInput) {
+        let extractedToken = '';
+        let extractedAccessToken = '';
+        let extractedRefreshToken = '';
+        let extractedTokenHash = '';
+
+        try {
+          // Parse hash fragments (#access_token=... or #token=...)
+          if (linkInput.includes('#')) {
+            const hashPart = linkInput.split('#')[1];
+            const params = new URLSearchParams(hashPart);
+            extractedAccessToken = params.get('access_token') || '';
+            extractedRefreshToken = params.get('refresh_token') || '';
+            extractedToken = params.get('token') || '';
+          }
+
+          // Parse query parameters (?token=... or ?token_hash=...)
+          if (linkInput.includes('?')) {
+            const queryPart = linkInput.split('?')[1].split('#')[0];
+            const params = new URLSearchParams(queryPart);
+            extractedToken = extractedToken || params.get('token') || '';
+            extractedTokenHash = params.get('token_hash') || '';
+          }
+        } catch {
+          // Fallback regex extraction
+          const tokenMatch = linkInput.match(/[?&#]token=([^&#]+)/);
+          if (tokenMatch) extractedToken = decodeURIComponent(tokenMatch[1]);
+          const hashMatch = linkInput.match(/[?&#]token_hash=([^&#]+)/);
+          if (hashMatch) extractedTokenHash = decodeURIComponent(hashMatch[1]);
+          const accessMatch = linkInput.match(/[?&#]access_token=([^&#]+)/);
+          if (accessMatch) extractedAccessToken = decodeURIComponent(accessMatch[1]);
+        }
+
+        if (extractedAccessToken) {
+          const { error: sessionError } = await supabase.auth.setSession({
+            access_token: extractedAccessToken,
+            refresh_token: extractedRefreshToken || '',
+          });
+          if (sessionError) throw sessionError;
+
+          setIsPasswordRecovery(true);
+          setView('update-password');
+          setNotification({
+            type: 'success',
+            message: 'Session verified from link! Please enter your new password.'
+          });
+          setLoading(false);
+          return;
+        }
+
+        if (extractedTokenHash) {
+          const { error: hashError } = await supabase.auth.verifyOtp({
+            token_hash: extractedTokenHash,
+            type: 'recovery',
+          });
+          if (hashError) throw hashError;
+
+          setIsPasswordRecovery(true);
+          setView('update-password');
+          setNotification({
+            type: 'success',
+            message: 'Token verified! Please enter your new password.'
+          });
+          setLoading(false);
+          return;
+        }
+
+        if (extractedToken) {
+          if (!emailTrimmed) {
+            setNotification({
+              type: 'error',
+              message: 'Please enter your registered Email ID along with the token.'
+            });
+            setLoading(false);
+            return;
+          }
+
+          const { error: otpError } = await supabase.auth.verifyOtp({
+            email: emailTrimmed,
+            token: extractedToken,
+            type: 'recovery',
+          });
+          if (otpError) throw otpError;
+
+          setIsPasswordRecovery(true);
+          setView('update-password');
+          setNotification({
+            type: 'success',
+            message: 'Token verified! Please enter your new password.'
+          });
+          setLoading(false);
+          return;
+        }
+      }
+
+      // If user provided a manual 6-digit code or raw token
+      if (tokenInput) {
+        if (!emailTrimmed) {
+          setNotification({
+            type: 'error',
+            message: 'Please enter your registered Email ID above to verify the code.'
+          });
+          setLoading(false);
+          return;
+        }
+
+        // Try standard verifyOtp with recovery type
+        const { error: otpErr } = await supabase.auth.verifyOtp({
+          email: emailTrimmed,
+          token: tokenInput,
+          type: 'recovery',
+        });
+
+        if (otpErr) {
+          // Attempt verify as token_hash if string is long
+          if (tokenInput.length > 10) {
+            const { error: hashErr } = await supabase.auth.verifyOtp({
+              token_hash: tokenInput,
+              type: 'recovery',
+            });
+            if (hashErr) throw otpErr;
+          } else {
+            throw otpErr;
+          }
+        }
+
+        setIsPasswordRecovery(true);
+        setView('update-password');
+        setNotification({
+          type: 'success',
+          message: 'Code verified successfully! Please enter your new password.'
+        });
+      }
+    } catch (err: any) {
+      setNotification({
+        type: 'error',
+        message: err?.message || 'Invalid or expired reset code. Please request a new reset email.'
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /**
+   * Handle setting a new password when in recovery session
+   */
+  const handleUpdatePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setNotification(null);
+
+    if (!newPassword || newPassword.length < 6) {
+      setNotification({
+        type: 'error',
+        message: 'New password must be at least 6 characters in length.'
+      });
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setNotification({
+        type: 'error',
+        message: 'Passwords do not match. Please re-enter.'
+      });
+      return;
+    }
+
+    if (!supabase) {
+      setNotification({
+        type: 'error',
+        message: 'Supabase service is not initialized.'
+      });
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const { data, error } = await supabase.auth.updateUser({
+        password: newPassword,
+      });
+
+      if (error) {
+        throw error;
+      }
+
+      setNotification({
+        type: 'success',
+        message: 'Password successfully updated! Logging into financial ledger...'
+      });
+
+      setIsPasswordRecovery(false);
+
+      if (data?.user) {
+        setTimeout(() => {
+          onLoginSuccess({
+            user: {
+              id: data.user.id,
+              email: data.user.email || email || 'user@enterprise.io'
+            },
+            mode: 'supabase',
+            supabaseConfigured: true
+          });
+        }, 800);
+      } else {
+        setTimeout(() => {
+          switchView('signin');
+        }, 1200);
+      }
+    } catch (err: any) {
+      setNotification({
+        type: 'error',
+        message: err?.message || 'Failed to update password. Your recovery session may have expired. Please request a new link.'
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /**
+   * Handle ID recovery format helper
+   */
+  const handleLookupId = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!recoveryName.trim()) return;
+
+    const formatted = recoveryName.trim().toLowerCase().replace(/[^a-z0-9._-]/g, '') + '@' + recoveryDomain.trim().toLowerCase();
+    setIdLookupResult(formatted);
+    setEmail(formatted);
+  };
+
   return (
     <div className="min-h-screen bg-[#09090b] flex flex-col md:flex-row relative overflow-hidden" id="supabase-auth-screen">
-      {/* Ambient glow decoration */}
+      {/* Ambient decorative glow */}
       <div className="absolute top-0 right-1/4 w-96 h-96 bg-blue-500/5 rounded-full blur-3xl pointer-events-none"></div>
 
-      {/* Left panel: Enterprise message & audit simulation */}
+      {/* Left panel: Enterprise information and audit security */}
       <div className="w-full md:w-5/12 bg-[#121214] border-b md:border-b-0 md:border-r border-zinc-800 p-8 lg:p-12 flex flex-col justify-between">
-        <div className="space-y-10">
+        <div className="space-y-8">
           <div>
-            <div className="flex items-center gap-2 mb-8">
+            <div className="flex items-center gap-2 mb-4">
               <div className="w-8 h-8 bg-blue-600 rounded flex items-center justify-center font-bold text-white text-sm shadow-md shadow-blue-900/20">
                 F
               </div>
@@ -183,345 +562,656 @@ export default function SupabaseAuth({ onLoginSuccess }: SupabaseAuthProps) {
               </span>
             </div>
 
+            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-500/10 border border-blue-500/20 text-[11px] font-medium text-blue-400 mb-4 tracking-wide">
+              <span>Next-Gen Enterprise Financial Intelligence</span>
+            </div>
+
             <h1 className="text-3xl lg:text-4xl font-light leading-tight text-zinc-100">
-              Double-entry precision for modern enterprise.
+              Precision Accounting &amp; Real-Time ERP
             </h1>
             <p className="mt-4 text-zinc-400 text-sm leading-relaxed max-w-sm">
-              Built for strict ACID compliance and immutable audit trails. Your financial integrity is our primary architectural constraint.
+              Empowering agile enterprises with autonomous double-entry ledgers, unified multi-entity financials, and audit-grade compliance.
             </p>
           </div>
 
-          {/* Connection status badge / Sandbox detail block */}
-          <div className="space-y-4">
-            <div className="bg-zinc-900/50 border border-zinc-800/80 p-4.5 rounded-lg space-y-3">
-              <div className="flex justify-between items-center">
-                <span className="text-[10px] uppercase tracking-widest text-zinc-500 font-bold">Audit Connection Status</span>
-                <span className={`w-2 h-2 rounded-full ${
-                  isSupabaseConfigured 
-                    ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' 
-                    : 'bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.5)] animate-pulse'
-                }`}></span>
-              </div>
-              
-              {isSupabaseConfigured ? (
-                <div className="text-xs text-zinc-400 font-sans space-y-1">
-                  <span className="text-emerald-400 font-semibold block">✓ Cloud Cluster Active</span>
-                  <p className="text-zinc-500 text-[11px] leading-normal">
-                    Routing security tokens and credentials securely through active Supabase Auth infrastructure.
-                  </p>
-                </div>
-              ) : (
-                <div className="text-xs text-zinc-400 font-sans space-y-1">
-                  <span className="text-amber-400 font-semibold block">⚠️ Simulation Sandbox Active</span>
-                  <p className="text-zinc-500 text-[11px] leading-normal">
-                    Supabase key is not defined in <code>.env</code>. You can log in using <strong>any credentials</strong> to preview the fully functional audit ledger immediately.
-                  </p>
-                </div>
-              )}
+          {/* Security Status */}
+          <div className="bg-zinc-900/50 border border-zinc-800/80 p-4.5 rounded-lg space-y-3">
+            <div className="flex justify-between items-center">
+              <span className="text-[10px] uppercase tracking-widest text-zinc-500 font-bold">Authentication Security</span>
+              <span className="flex items-center gap-1.5 text-[10px] font-semibold text-emerald-400">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]"></span>
+                STRICT REGISTERED ONLY
+              </span>
+            </div>
+            
+            <div className="text-xs text-zinc-400 font-sans space-y-1">
+              <span className="text-zinc-200 font-semibold block">Supabase Enterprise Auth</span>
+              <p className="text-zinc-500 text-[11px] leading-normal">
+                Only verified credentials with cryptographic tokens can access corporate financial ledgers and journals.
+              </p>
+            </div>
 
-              <div className="pt-2 border-t border-zinc-800/60 font-mono text-[10px] text-zinc-500 space-y-1">
-                <div className="flex justify-between">
-                  <span>Standard ledger variation:</span>
-                  <span className="text-emerald-400">0.00 [MATCHED]</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Cryptographic signature:</span>
-                  <span>AES-256-GCM COMPLIANT</span>
-                </div>
+            <div className="pt-2 border-t border-zinc-800/60 font-mono text-[10px] text-zinc-500 space-y-1">
+              <div className="flex justify-between">
+                <span>Credential Protocol:</span>
+                <span className="text-blue-400 font-semibold">SUPABASE AUTH v2 (JWT)</span>
+              </div>
+              <div className="flex justify-between">
+                <span>Recovery Support:</span>
+                <span className="text-emerald-400 font-semibold">EMAIL OTP &amp; RESET LINK</span>
               </div>
             </div>
           </div>
         </div>
 
         <div className="mt-8 md:mt-0 flex items-center gap-6 opacity-40 text-[10px] text-zinc-400 uppercase tracking-widest font-bold font-mono">
-          <span>PCI-DSS COMPLIANT</span>
+          <span>SECURE AUDIT PORTAL</span>
           <span>SOC2 TYPE II</span>
+          <span>GAAP READY</span>
         </div>
       </div>
 
-      {/* Right panel: Form input */}
+      {/* Right panel: Dynamic Authentication / Recovery Forms */}
       <div className="w-full md:w-7/12 flex items-center justify-center p-6 sm:p-12 lg:p-16">
         <div className="w-full max-w-md space-y-6">
+
+          {/* Form Header */}
           <div className="flex flex-col gap-1">
             <div className="flex items-center justify-between">
-              <h2 className="text-2xl font-bold tracking-tight text-slate-900 font-sans">Sign in to Console</h2>
-              <span className={`text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded ${
-                authMode === 'cloud' 
-                  ? 'bg-blue-100 text-blue-800 border border-blue-200' 
-                  : 'bg-amber-100 text-amber-800 border border-amber-200'
-              }`}>
-                {authMode === 'cloud' ? 'Cloud Supabase' : 'Offline Sandbox'}
+              <h2 className="text-2xl font-bold tracking-tight text-slate-900 font-sans">
+                {view === 'signin' && 'Sign in to Console'}
+                {view === 'signup' && 'Register Account'}
+                {view === 'forgot-password' && 'Reset Password'}
+                {view === 'verify-code' && 'Enter Code / Paste Link'}
+                {view === 'forgot-id' && 'Recover Registered ID'}
+                {view === 'update-password' && 'Set New Password'}
+              </h2>
+              <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-blue-100 text-blue-800 border border-blue-200">
+                Verified Portal
               </span>
             </div>
-            <p className="text-slate-600 text-xs">Enter your enterprise credentials to access the financial ledger.</p>
+            <p className="text-slate-600 text-xs">
+              {view === 'signin' && 'Enter your registered email ID and password key to continue.'}
+              {view === 'signup' && 'Create a verified corporate account to access the double-entry ledger.'}
+              {view === 'forgot-password' && 'Enter your registered email to receive secure recovery instructions.'}
+              {view === 'verify-code' && 'Enter the code or paste the reset link from your email to update password.'}
+              {view === 'forgot-id' && 'Verify your corporate identity or lookup your registered domain ID.'}
+              {view === 'update-password' && 'Enter and confirm your new secure password to restore access.'}
+            </p>
           </div>
 
-          {/* Interactive tab selector */}
-          <div className="flex border-b border-slate-200 text-xs font-semibold gap-2 select-none">
-            <button
-              type="button"
-              onClick={() => { setIsSignUp(false); setAuthMode('cloud'); setNotification(null); }}
-              className={`pb-3 px-3 border-b-2 transition-all cursor-pointer ${
-                !isSignUp && authMode === 'cloud'
-                  ? 'border-blue-600 text-blue-600 font-bold' 
-                  : 'border-transparent text-slate-500 hover:text-slate-900'
-              }`}
-              id="tab-signin"
-            >
-              Cloud Login
-            </button>
-            <button
-              type="button"
-              onClick={() => { setIsSignUp(true); setAuthMode('cloud'); setNotification(null); }}
-              className={`pb-3 px-3 border-b-2 transition-all cursor-pointer ${
-                isSignUp && authMode === 'cloud'
-                  ? 'border-blue-600 text-blue-600 font-bold' 
-                  : 'border-transparent text-slate-500 hover:text-slate-900'
-              }`}
-              id="tab-signup"
-            >
-              Create Account
-            </button>
-            <button
-              type="button"
-              onClick={() => { 
-                setAuthMode('sandbox'); 
-                setIsSignUp(false); 
-                setNotification({
-                  type: 'warning',
-                  message: 'Sandbox mode is active. You can enter using any email without needing live cloud connectivity.'
-                });
-              }}
-              className={`pb-3 px-3 border-b-2 transition-all cursor-pointer ml-auto ${
-                authMode === 'sandbox'
-                  ? 'border-amber-600 text-amber-700 font-bold' 
-                  : 'border-transparent text-slate-500 hover:text-slate-900'
-              }`}
-              id="tab-sandbox"
-            >
-              ⚡ Instant Sandbox
-            </button>
-          </div>
-
-          {/* High-contrast Notification / Recovery Box */}
-          {notification && (
-            <div className={`p-4 rounded-lg border text-xs shadow-sm flex flex-col gap-2 ${
-              notification.type === 'success' 
-                ? 'bg-emerald-50 border-emerald-300 text-emerald-950' 
-                : notification.type === 'warning'
-                ? 'bg-amber-50 border-amber-300 text-amber-950'
-                : 'bg-red-50 border-red-300 text-red-950'
-            }`} id="auth-alert-message">
-              <div className="flex items-start gap-2.5">
-                {notification.type === 'success' ? (
-                  <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600 mt-0.5" />
-                ) : notification.type === 'warning' ? (
-                  <Info className="h-4 w-4 shrink-0 text-amber-600 mt-0.5" />
-                ) : (
-                  <AlertCircle className="h-4 w-4 shrink-0 text-red-600 mt-0.5" />
-                )}
-                <div className="flex-1">
-                  <div className="font-semibold text-[11px] uppercase tracking-wider mb-0.5">
-                    {notification.type === 'success' ? 'Operation Success' : notification.type === 'warning' ? 'Notice' : 'Authentication Issue'}
-                  </div>
-                  <div className="text-xs leading-relaxed font-sans font-medium">
-                    {notification.message}
-                  </div>
-                </div>
-              </div>
-
-              {/* Seamless 1-Click Recovery button when Network / Cloud is unreachable */}
-              {notification.isNetworkFailure && (
-                <div className="mt-2 pt-2 border-t border-red-200/80 flex flex-col gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => handleSandboxLogin(email)}
-                    className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-3 rounded text-xs shadow transition-colors flex items-center justify-center gap-2 cursor-pointer"
-                  >
-                    <Sparkles className="h-3.5 w-3.5 text-blue-200" />
-                    <span>Enter Console in Instant Sandbox Mode ({email ? email : 'Personal Account'})</span>
-                  </button>
-                  <span className="text-[10px] text-slate-500 text-center">
-                    All double-entry ledger features and balance sheets will operate locally.
-                  </span>
-                </div>
-              )}
+          {/* Tab selector for Sign In / Sign Up (visible on sign in & sign up views) */}
+          {(view === 'signin' || view === 'signup') && (
+            <div className="flex border-b border-slate-200 text-xs font-semibold gap-2 select-none">
+              <button
+                type="button"
+                onClick={() => switchView('signin')}
+                className={`pb-3 px-4 border-b-2 transition-all cursor-pointer ${
+                  view === 'signin'
+                    ? 'border-blue-600 text-blue-600 font-bold' 
+                    : 'border-transparent text-slate-500 hover:text-slate-900'
+                }`}
+                id="tab-signin"
+              >
+                Sign In
+              </button>
+              <button
+                type="button"
+                onClick={() => switchView('signup')}
+                className={`pb-3 px-4 border-b-2 transition-all cursor-pointer ${
+                  view === 'signup'
+                    ? 'border-blue-600 text-blue-600 font-bold' 
+                    : 'border-transparent text-slate-500 hover:text-slate-900'
+                }`}
+                id="tab-signup"
+              >
+                Create Account
+              </button>
             </div>
           )}
 
-          <form onSubmit={handleAuth} className="space-y-4">
-            <div className="space-y-1.5">
-              <label htmlFor="email" className="block text-xs uppercase tracking-wider text-slate-700 font-bold">
-                Email Address
-              </label>
-              <div className="relative rounded">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
-                  <Mail className="h-4 w-4" />
+          {/* Notification Banner */}
+          {notification && (
+            <div className={`p-4 rounded-lg border text-xs shadow-sm flex items-start gap-2.5 ${
+              notification.type === 'success' 
+                ? 'bg-emerald-50 border-emerald-300 text-emerald-950' 
+                : notification.type === 'info'
+                ? 'bg-blue-50 border-blue-300 text-blue-950'
+                : 'bg-red-50 border-red-300 text-red-950'
+            }`} id="auth-alert-message">
+              {notification.type === 'success' ? (
+                <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600 mt-0.5" />
+              ) : notification.type === 'info' ? (
+                <KeyRound className="h-4 w-4 shrink-0 text-blue-600 mt-0.5" />
+              ) : (
+                <AlertCircle className="h-4 w-4 shrink-0 text-red-600 mt-0.5" />
+              )}
+              <div className="flex-1">
+                <div className="font-semibold text-[11px] uppercase tracking-wider mb-0.5">
+                  {notification.type === 'success' ? 'Success' : notification.type === 'info' ? 'Notice' : 'Authentication Error'}
                 </div>
-                <input
-                  id="email"
-                  name="email"
-                  type="email"
-                  autoComplete="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="w-full bg-white border border-slate-300 rounded pl-10 pr-4 py-2.5 text-xs sm:text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 transition-colors font-mono"
-                  placeholder="architect@enterprise.io"
-                />
+                <div className="text-xs leading-relaxed font-sans font-medium">
+                  {notification.message}
+                </div>
               </div>
             </div>
+          )}
 
-            <div className="space-y-1.5">
-              <div className="flex justify-between items-center text-xs">
-                <label htmlFor="password" className="uppercase tracking-wider text-slate-700 font-bold">
-                  Password Key
-                </label>
-                {!isSignUp && (
+          {/* VIEW 1: SIGN IN FORM */}
+          {view === 'signin' && (
+            <form onSubmit={handleSignIn} className="space-y-4">
+              <div className="space-y-1.5">
+                <div className="flex justify-between items-center text-xs">
+                  <label htmlFor="email" className="uppercase tracking-wider text-slate-700 font-bold">
+                    Registered Email ID
+                  </label>
                   <button
                     type="button"
-                    onClick={() => setShowForgotModal(!showForgotModal)}
+                    onClick={() => switchView('forgot-id')}
                     className="text-blue-600 hover:text-blue-800 font-semibold cursor-pointer underline text-[11px]"
+                    id="link-forgot-id-top"
                   >
-                    Forgot?
+                    Forget ID?
                   </button>
-                )}
-              </div>
-              <div className="relative rounded">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
-                  <Lock className="h-4 w-4" />
                 </div>
-                <input
-                  id="password"
-                  name="password"
-                  type="password"
-                  autoComplete="current-password"
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="w-full bg-white border border-slate-300 rounded pl-10 pr-4 py-2.5 text-xs sm:text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 transition-colors font-mono"
-                  placeholder="••••••••"
-                />
+                <div className="relative rounded">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                    <Mail className="h-4 w-4" />
+                  </div>
+                  <input
+                    id="email"
+                    name="email"
+                    type="email"
+                    autoComplete="email"
+                    required
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="w-full bg-white border border-slate-300 rounded pl-10 pr-4 py-2.5 text-xs sm:text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 transition-colors font-mono"
+                    placeholder="name@company.com"
+                  />
+                </div>
               </div>
-              {isSignUp && (
-                <p className="mt-1 text-[11px] text-slate-500">
-                  Minimum length is 6 characters.
-                </p>
-              )}
-            </div>
 
-            {/* Forgot password explanation toggle */}
-            {showForgotModal && (
-              <div className="p-3 bg-slate-50 border border-slate-200 rounded text-xs text-slate-700 space-y-2">
-                <div className="font-semibold text-slate-900 flex items-center justify-between">
-                  <span>Account Credentials Recovery</span>
-                  <button 
-                    type="button" 
-                    onClick={() => setShowForgotModal(false)}
-                    className="text-slate-400 hover:text-slate-600 text-xs"
+              <div className="space-y-1.5">
+                <div className="flex justify-between items-center text-xs">
+                  <label htmlFor="password" className="uppercase tracking-wider text-slate-700 font-bold">
+                    Password Key
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => switchView('forgot-password')}
+                    className="text-blue-600 hover:text-blue-800 font-semibold cursor-pointer underline text-[11px]"
+                    id="link-forgot-password"
                   >
-                    ✕
+                    Forgot Password?
                   </button>
                 </div>
-                <p className="text-[11px] leading-relaxed text-slate-600">
-                  If you forgot your password or cannot access your email verification, you can immediately access the ledger using <strong>Instant Sandbox Mode</strong> with full double-entry precision.
-                </p>
+                <div className="relative rounded">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                    <Lock className="h-4 w-4" />
+                  </div>
+                  <input
+                    id="password"
+                    name="password"
+                    type="password"
+                    autoComplete="current-password"
+                    required
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="w-full bg-white border border-slate-300 rounded pl-10 pr-4 py-2.5 text-xs sm:text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 transition-colors font-mono"
+                    placeholder="••••••••"
+                  />
+                </div>
+              </div>
+
+              <div className="pt-2 space-y-2">
                 <button
-                  type="button"
-                  onClick={() => {
-                    setShowForgotModal(false);
-                    handleSandboxLogin(email || 'architect@enterprise.io');
-                  }}
-                  className="w-full bg-slate-200 hover:bg-slate-300 text-slate-800 font-semibold py-1.5 px-3 rounded text-xs transition-colors cursor-pointer"
+                  id="auth-submit-button"
+                  type="submit"
+                  disabled={loading}
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded transition-all text-sm shadow-md active:scale-98 flex items-center justify-center gap-2 disabled:opacity-50 disabled:pointer-events-none cursor-pointer"
                 >
-                  Enter via Sandbox with {email || 'Current Account'}
+                  {loading ? (
+                    <div className="flex items-center gap-2">
+                      <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin"></div>
+                      <span>Verifying Credentials...</span>
+                    </div>
+                  ) : (
+                    <>
+                      <span>Login</span>
+                      <ArrowRight className="h-4 w-4" />
+                    </>
+                  )}
                 </button>
               </div>
-            )}
 
-            <div className="pt-2 space-y-2">
-              <button
-                id="auth-submit-button"
-                type="submit"
-                disabled={loading}
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded transition-all text-sm shadow-md active:scale-98 flex items-center justify-center gap-2 disabled:opacity-50 disabled:pointer-events-none cursor-pointer"
-              >
-                {loading ? (
-                  <div className="flex items-center gap-2">
-                    <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin"></div>
-                    <span>Authenticating Handshake...</span>
+              <div className="pt-2 flex justify-between items-center text-xs text-slate-500">
+                <button
+                  type="button"
+                  onClick={() => switchView('forgot-id')}
+                  className="text-slate-600 hover:text-slate-900 font-semibold underline cursor-pointer"
+                  id="link-forgot-id-bottom"
+                >
+                  Forget ID?
+                </button>
+                <button
+                  type="button"
+                  onClick={() => switchView('verify-code')}
+                  className="text-blue-600 hover:text-blue-800 font-semibold underline cursor-pointer"
+                >
+                  Have a Reset Code / Link?
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* VIEW 2: SIGN UP / REGISTER FORM */}
+          {view === 'signup' && (
+            <form onSubmit={handleSignUp} className="space-y-4">
+              <div className="space-y-1.5">
+                <label htmlFor="signup-email" className="block text-xs uppercase tracking-wider text-slate-700 font-bold">
+                  Corporate Email ID
+                </label>
+                <div className="relative rounded">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                    <Mail className="h-4 w-4" />
                   </div>
-                ) : (
-                  <>
-                    <span>
-                      {authMode === 'sandbox' 
-                        ? 'Enter Ledger (Sandbox Mode)' 
-                        : isSignUp 
-                        ? 'Create Corporate Account' 
-                        : 'Access Ledger Console'}
-                    </span>
-                    <ArrowRight className="h-4 w-4" />
-                  </>
-                )}
+                  <input
+                    id="signup-email"
+                    name="email"
+                    type="email"
+                    autoComplete="email"
+                    required
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="w-full bg-white border border-slate-300 rounded pl-10 pr-4 py-2.5 text-xs sm:text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 transition-colors font-mono"
+                    placeholder="new_user@company.com"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label htmlFor="signup-password" className="uppercase tracking-wider text-slate-700 font-bold text-xs">
+                  Create Password Key
+                </label>
+                <div className="relative rounded">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                    <Lock className="h-4 w-4" />
+                  </div>
+                  <input
+                    id="signup-password"
+                    name="password"
+                    type="password"
+                    autoComplete="new-password"
+                    required
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="w-full bg-white border border-slate-300 rounded pl-10 pr-4 py-2.5 text-xs sm:text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 transition-colors font-mono"
+                    placeholder="••••••••"
+                  />
+                </div>
+                <p className="text-[11px] text-slate-500">
+                  Must be at least 6 characters.
+                </p>
+              </div>
+
+              <div className="pt-2">
+                <button
+                  id="auth-signup-button"
+                  type="submit"
+                  disabled={loading}
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded transition-all text-sm shadow-md active:scale-98 flex items-center justify-center gap-2 disabled:opacity-50 disabled:pointer-events-none cursor-pointer"
+                >
+                  {loading ? (
+                    <div className="flex items-center gap-2">
+                      <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin"></div>
+                      <span>Registering Account in Supabase...</span>
+                    </div>
+                  ) : (
+                    <>
+                      <span>Register</span>
+                      <ArrowRight className="h-4 w-4" />
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* VIEW 3: FORGOT PASSWORD (EMAIL RESET LINK) */}
+          {view === 'forgot-password' && (
+            <div className="space-y-4">
+              <button
+                type="button"
+                onClick={() => switchView('signin')}
+                className="flex items-center gap-1.5 text-xs text-slate-600 hover:text-slate-900 font-semibold cursor-pointer mb-2"
+              >
+                <ArrowLeft className="h-3.5 w-3.5" />
+                <span>Back to Sign In</span>
               </button>
 
-              {/* Direct Instant Sandbox button */}
-              {authMode === 'cloud' && (
+              <form onSubmit={handleForgotPassword} className="space-y-4">
+                <div className="space-y-1.5">
+                  <label htmlFor="reset-email" className="block text-xs uppercase tracking-wider text-slate-700 font-bold">
+                    Registered Email ID
+                  </label>
+                  <div className="relative rounded">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                      <Mail className="h-4 w-4" />
+                    </div>
+                    <input
+                      id="reset-email"
+                      type="email"
+                      required
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      className="w-full bg-white border border-slate-300 rounded pl-10 pr-4 py-2.5 text-xs sm:text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 transition-colors font-mono"
+                      placeholder="name@company.com"
+                    />
+                  </div>
+                  <p className="text-[11px] text-slate-500">
+                    A secure password recovery link will be sent to your registered address.
+                  </p>
+                </div>
+
+                <div className="pt-2 space-y-2">
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded transition-all text-sm shadow-md active:scale-98 flex items-center justify-center gap-2 disabled:opacity-50 disabled:pointer-events-none cursor-pointer"
+                  >
+                    {loading ? (
+                      <div className="flex items-center gap-2">
+                        <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin"></div>
+                        <span>Sending Recovery Email...</span>
+                      </div>
+                    ) : (
+                      <>
+                        <KeyRound className="h-4 w-4" />
+                        <span>Send Password Reset Link</span>
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => switchView('verify-code')}
+                    className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 font-medium py-2 rounded text-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <span>Already have the reset link or code? Click here</span>
+                  </button>
+                </div>
+              </form>
+
+              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-600 space-y-2">
+                <div className="font-semibold text-slate-800 flex items-center gap-1.5">
+                  <HelpCircle className="h-3.5 w-3.5 text-blue-600" />
+                  <span>Why does the email link show "Page not found"?</span>
+                </div>
+                <p className="text-[11px] leading-relaxed text-slate-600">
+                  By default, Supabase email links point to <code className="bg-slate-200 px-1 rounded">localhost:3000</code>. To fix this:
+                </p>
+                <ol className="text-[11px] list-decimal list-inside space-y-1 text-slate-700 font-sans">
+                  <li>In your email, right-click the reset button $\rightarrow$ <strong>Copy Link Address</strong></li>
+                  <li>Click <strong>"Already have the reset link or code"</strong> above and paste it directly!</li>
+                </ol>
+              </div>
+            </div>
+          )}
+
+          {/* VIEW 4: DIRECT CODE / LINK PASTE VERIFICATION (Fixes Page Not Found) */}
+          {view === 'verify-code' && (
+            <div className="space-y-4">
+              <button
+                type="button"
+                onClick={() => switchView('signin')}
+                className="flex items-center gap-1.5 text-xs text-slate-600 hover:text-slate-900 font-semibold cursor-pointer mb-2"
+              >
+                <ArrowLeft className="h-3.5 w-3.5" />
+                <span>Back to Sign In</span>
+              </button>
+
+              <form onSubmit={handleVerifyOtpOrLink} className="space-y-4">
+                <div className="space-y-1.5">
+                  <label htmlFor="verify-email" className="block text-xs uppercase tracking-wider text-slate-700 font-bold">
+                    Registered Email ID
+                  </label>
+                  <div className="relative rounded">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                      <Mail className="h-4 w-4" />
+                    </div>
+                    <input
+                      id="verify-email"
+                      type="email"
+                      required
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      className="w-full bg-white border border-slate-300 rounded pl-10 pr-4 py-2 text-xs sm:text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-600 transition-colors font-mono"
+                      placeholder="name@company.com"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label htmlFor="verify-link" className="block text-xs uppercase tracking-wider text-slate-700 font-bold">
+                    Paste Reset Link from Email (Recommended)
+                  </label>
+                  <textarea
+                    id="verify-link"
+                    rows={2}
+                    value={pastedLink}
+                    onChange={(e) => setPastedLink(e.target.value)}
+                    className="w-full bg-white border border-slate-300 rounded p-2.5 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-600 transition-colors font-mono resize-none"
+                    placeholder="Copy the link from your email and paste it here (e.g. https://poaakjzbshdekjfvttve.supabase.co/auth/v1/verify?... or http://localhost:3000#access_token=...)"
+                  />
+                </div>
+
+                <div className="relative py-1 flex items-center">
+                  <div className="w-full border-t border-slate-200"></div>
+                  <span className="absolute left-1/2 -translate-x-1/2 bg-white px-2 text-[10px] text-slate-500 uppercase font-bold">
+                    OR 6-Digit Code
+                  </span>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label htmlFor="verify-token" className="block text-xs uppercase tracking-wider text-slate-700 font-bold">
+                    6-Digit Reset Code / Token
+                  </label>
+                  <input
+                    id="verify-token"
+                    type="text"
+                    value={otpToken}
+                    onChange={(e) => setOtpToken(e.target.value)}
+                    className="w-full bg-white border border-slate-300 rounded px-3 py-2 text-xs sm:text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-600 transition-colors font-mono tracking-widest text-center font-bold"
+                    placeholder="123456"
+                  />
+                </div>
+
+                <div className="pt-2">
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded transition-all text-sm shadow-md active:scale-98 flex items-center justify-center gap-2 disabled:opacity-50 disabled:pointer-events-none cursor-pointer"
+                  >
+                    {loading ? (
+                      <div className="flex items-center gap-2">
+                        <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin"></div>
+                        <span>Verifying Reset Credentials...</span>
+                      </div>
+                    ) : (
+                      <>
+                        <CheckCircle2 className="h-4 w-4" />
+                        <span>Verify &amp; Proceed to Set New Password</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
+
+          {/* VIEW 5: FORGOT ID / ACCOUNT LOOKUP */}
+          {view === 'forgot-id' && (
+            <div className="space-y-4">
+              <button
+                type="button"
+                onClick={() => switchView('signin')}
+                className="flex items-center gap-1.5 text-xs text-slate-600 hover:text-slate-900 font-semibold cursor-pointer mb-2"
+              >
+                <ArrowLeft className="h-3.5 w-3.5" />
+                <span>Back to Sign In</span>
+              </button>
+
+              <div className="space-y-3 p-4 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-700">
+                <div className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                  <UserCheck className="h-4 w-4 text-blue-600" />
+                  <span>Registered ID Recovery &amp; Support</span>
+                </div>
+                <p className="text-[11px] leading-relaxed text-slate-600">
+                  Your registered ID is the corporate email address used when creating your FinexERP account. If you are unsure of your exact ID format, use the domain format helper below or contact your IT audit administrator.
+                </p>
+
+                <form onSubmit={handleLookupId} className="pt-2 space-y-2">
+                  <label className="block text-[10px] uppercase font-bold text-slate-600">
+                    Corporate Username or Alias
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={recoveryName}
+                      onChange={(e) => setRecoveryName(e.target.value)}
+                      placeholder="e.g. jsmith or nadim"
+                      className="flex-1 bg-white border border-slate-300 rounded px-3 py-2 text-xs text-slate-900 font-mono focus:outline-none focus:border-blue-600"
+                    />
+                    <select
+                      value={recoveryDomain}
+                      onChange={(e) => setRecoveryDomain(e.target.value)}
+                      className="bg-white border border-slate-300 rounded px-2 py-2 text-xs text-slate-800 font-mono"
+                    >
+                      <option value="enterprise.io">@enterprise.io</option>
+                      <option value="finexerp.com">@finexerp.com</option>
+                      <option value="gmail.com">@gmail.com</option>
+                      <option value="corporate.org">@corporate.org</option>
+                    </select>
+                  </div>
+                  <button
+                    type="submit"
+                    className="w-full bg-slate-800 hover:bg-slate-900 text-white font-semibold py-2 px-3 rounded text-xs transition-colors cursor-pointer"
+                  >
+                    Format &amp; Apply Email ID
+                  </button>
+                </form>
+
+                {idLookupResult && (
+                  <div className="mt-2 p-2.5 bg-blue-50 border border-blue-200 rounded text-xs text-blue-900 space-y-1">
+                    <span className="font-semibold block">Formatted Registered ID:</span>
+                    <code className="font-mono text-xs font-bold text-blue-700 block">{idLookupResult}</code>
+                    <button
+                      type="button"
+                      onClick={() => switchView('signin')}
+                      className="mt-1 text-blue-600 hover:underline font-semibold text-[11px] block cursor-pointer"
+                    >
+                      → Proceed to Sign In with this ID
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <div className="pt-1 flex justify-between items-center text-xs">
+                <span className="text-slate-500">Need password reset instead?</span>
                 <button
                   type="button"
-                  onClick={() => handleSandboxLogin(email)}
-                  disabled={loading}
-                  className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 font-medium py-2 rounded text-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                  onClick={() => switchView('forgot-password')}
+                  className="text-blue-600 hover:text-blue-800 font-semibold underline cursor-pointer"
                 >
-                  <Sparkles className="h-3.5 w-3.5 text-blue-600" />
-                  <span>Bypass / Enter via Demo Sandbox Mode</span>
+                  Send Password Reset Link
                 </button>
-              )}
+              </div>
             </div>
-          </form>
+          )}
 
-          <div className="relative py-2">
-            <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-slate-200"></div>
+          {/* VIEW 6: SET NEW PASSWORD FORM (RECOVERY COMPLETION) */}
+          {view === 'update-password' && (
+            <div className="space-y-4">
+              <form onSubmit={handleUpdatePassword} className="space-y-4">
+                <div className="space-y-1.5">
+                  <label htmlFor="new-password" className="block text-xs uppercase tracking-wider text-slate-700 font-bold">
+                    New Password Key
+                  </label>
+                  <div className="relative rounded">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                      <Lock className="h-4 w-4" />
+                    </div>
+                    <input
+                      id="new-password"
+                      type="password"
+                      required
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      className="w-full bg-white border border-slate-300 rounded pl-10 pr-4 py-2.5 text-xs sm:text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 transition-colors font-mono"
+                      placeholder="New password (min 6 chars)"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label htmlFor="confirm-password" className="block text-xs uppercase tracking-wider text-slate-700 font-bold">
+                    Confirm New Password
+                  </label>
+                  <div className="relative rounded">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                      <Lock className="h-4 w-4" />
+                    </div>
+                    <input
+                      id="confirm-password"
+                      type="password"
+                      required
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      className="w-full bg-white border border-slate-300 rounded pl-10 pr-4 py-2.5 text-xs sm:text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 transition-colors font-mono"
+                      placeholder="Repeat new password"
+                    />
+                  </div>
+                </div>
+
+                <div className="pt-2">
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded transition-all text-sm shadow-md active:scale-98 flex items-center justify-center gap-2 disabled:opacity-50 disabled:pointer-events-none cursor-pointer"
+                  >
+                    {loading ? (
+                      <div className="flex items-center gap-2">
+                        <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin"></div>
+                        <span>Updating Password Key...</span>
+                      </div>
+                    ) : (
+                      <>
+                        <Check className="h-4 w-4" />
+                        <span>Save New Password &amp; Enter Console</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setIsPasswordRecovery(false);
+                  switchView('signin');
+                }}
+                className="w-full text-center text-xs text-slate-500 hover:text-slate-800 font-medium py-1"
+              >
+                Cancel and return to Sign In
+              </button>
             </div>
-            <div className="relative flex justify-center text-[10px] uppercase tracking-widest text-slate-500 font-bold">
-              <span className="bg-[#f8fafc] px-3">Quick Demo Accounts</span>
-            </div>
-          </div>
+          )}
 
-          <div className="grid grid-cols-2 gap-2.5">
-            <button 
-              type="button"
-              onClick={() => { 
-                setEmail('architect@enterprise.io'); 
-                setPassword('corporate-password'); 
-                setAuthMode('cloud');
-                setNotification(null);
-              }}
-              className="flex items-center justify-center gap-1.5 border border-slate-300 rounded py-2 text-xs font-medium text-slate-700 bg-white hover:bg-slate-50 hover:border-slate-400 transition-colors cursor-pointer shadow-xs"
-            >
-              <Shield className="w-3.5 h-3.5 text-blue-600" />
-              <span>Architect</span>
-            </button>
-
-            <button 
-              type="button"
-              onClick={() => { 
-                setEmail('auditor@compliance.org'); 
-                setPassword('auditor-password'); 
-                setAuthMode('cloud');
-                setNotification(null);
-              }}
-              className="flex items-center justify-center gap-1.5 border border-slate-300 rounded py-2 text-xs font-medium text-slate-700 bg-white hover:bg-slate-50 hover:border-slate-400 transition-colors cursor-pointer shadow-xs"
-            >
-              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-              <span>Auditor</span>
-            </button>
-          </div>
-
-          <p className="text-center text-[11px] text-slate-500">
-            Protected by enterprise double-entry audit encryption protocols.
+          <p className="text-center text-[11px] text-slate-500 pt-2">
+            Protected by enterprise-grade cryptographic authentication protocols.
           </p>
+
         </div>
       </div>
     </div>
