@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { UserSession, JournalEntry, JournalLine, AuditLog, Account, mapDbAccount } from './types';
 import { INITIAL_JOURNAL_ENTRIES, CHART_OF_ACCOUNTS } from './constants';
 import SupabaseAuth from './components/SupabaseAuth';
@@ -15,26 +15,56 @@ import ComplianceReports from './components/ComplianceReports';
 import ConnectivityStatus from './components/ConnectivityStatus';
 import AuditHistory from './components/AuditHistory';
 import InvoicesView from './components/InvoicesView';
+import QboSettingsMegaMenu, { QboMenuKey } from './components/QboSettingsMegaMenu';
+import CompanySettingsModal from './components/CompanySettingsModal';
+import VideoTutorialsModal from './components/VideoTutorialsModal';
 import { useAuth, ProtectedRoute } from './AuthContext';
+import { useCompany } from './CompanyContext';
 import { 
   LogOut, 
   Database, 
   UserCheck, 
-  Globe,
-  Settings,
-  LayoutDashboard,
-  Coins,
-  FileSpreadsheet,
-  BarChart3,
-  Menu,
-  X,
-  ShieldCheck,
-  History,
-  FileText
+  Globe, 
+  Settings, 
+  LayoutDashboard, 
+  Coins, 
+  FileSpreadsheet, 
+  BarChart3, 
+  Menu, 
+  X, 
+  ShieldCheck, 
+  History, 
+  FileText,
+  Building2,
+  ChevronDown,
+  Search,
+  HelpCircle,
+  Briefcase,
+  Plus,
+  Check,
+  Lock,
+  Sliders
 } from 'lucide-react';
 
 export default function App() {
   const { session, setSession, logout, supabase } = useAuth();
+  const { 
+    activeCompany, 
+    activeCompanyId, 
+    companies, 
+    setActiveCompanyId,
+    viewMode,
+    toggleViewMode,
+    isPeriodClosed,
+    verifyClosingPassword
+  } = useCompany();
+
+  // Mega Menu and Sub-Modals
+  const [isMegaMenuOpen, setIsMegaMenuOpen] = useState<boolean>(false);
+  const [activeSettingsModalTab, setActiveSettingsModalTab] = useState<string | null>(null);
+  const [isVideoTutorialsOpen, setIsVideoTutorialsOpen] = useState<boolean>(false);
+  const [isCompanyDropdownOpen, setIsCompanyDropdownOpen] = useState<boolean>(false);
+
   const [journalEntries, setJournalEntries] = useState<JournalEntry[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [dbColumns, setDbColumns] = useState<string[]>([]);
@@ -46,8 +76,8 @@ export default function App() {
   // Dynamic ledger accounts state (loaded from Supabase or fallback defaults)
   const getLocalSandboxAccounts = (userId?: string): Account[] => {
     try {
-      const activeId = userId || session?.user?.id || 'guest';
-      const saved = localStorage.getItem(`conexerp_sandbox_accounts_${activeId}`);
+      const activeId = activeCompany?.id || userId || session?.user?.id || 'guest';
+      const saved = localStorage.getItem(`finex_company_${activeId}_accounts`);
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
@@ -64,88 +94,96 @@ export default function App() {
   const [accountsLoading, setAccountsLoading] = useState<boolean>(false);
   const [accountsSource, setAccountsSource] = useState<'local' | 'supabase' | 'supabase-empty'>('local');
 
-  // Load initial data & restore local storage backup for sandbox whenever session changes
+  // Load initial data & restore local storage backup for the active company
   useEffect(() => {
-    if (!session) return;
+    if (!session || !activeCompany) return;
     
-    const userId = session.user?.id || 'guest';
+    const companyId = activeCompany.id;
 
-    // 1. Recover customized accounts layout from localStorage
-    const savedSandboxAccounts = localStorage.getItem(`conexerp_sandbox_accounts_${userId}`);
-    if (savedSandboxAccounts) {
+    // 1. Recover customized accounts layout from localStorage for active company
+    const savedCompanyAccounts = localStorage.getItem(`finex_company_${companyId}_accounts`);
+    if (savedCompanyAccounts) {
       try {
-        const parsedAccts = JSON.parse(savedSandboxAccounts);
+        const parsedAccts = JSON.parse(savedCompanyAccounts);
         if (Array.isArray(parsedAccts) && parsedAccts.length > 0) {
           setAccounts(parsedAccts);
         } else {
           setAccounts(CHART_OF_ACCOUNTS);
         }
       } catch (e) {
-        console.error('Error loading sandbox accounts:', e);
+        console.error('Error loading company accounts:', e);
         setAccounts(CHART_OF_ACCOUNTS);
       }
     } else {
-      setAccounts(CHART_OF_ACCOUNTS);
+      // Check legacy backup or bootstrap default accounts
+      const legacy = localStorage.getItem(`conexerp_sandbox_accounts_${session.user?.id || 'guest'}`);
+      if (legacy && companies.length <= 1) {
+        try {
+          const parsed = JSON.parse(legacy);
+          setAccounts(parsed);
+          localStorage.setItem(`finex_company_${companyId}_accounts`, JSON.stringify(parsed));
+        } catch (_) {
+          setAccounts(CHART_OF_ACCOUNTS);
+          localStorage.setItem(`finex_company_${companyId}_accounts`, JSON.stringify(CHART_OF_ACCOUNTS));
+        }
+      } else {
+        setAccounts(CHART_OF_ACCOUNTS);
+        localStorage.setItem(`finex_company_${companyId}_accounts`, JSON.stringify(CHART_OF_ACCOUNTS));
+      }
     }
 
-    // 2. Recover custom journal entries list from local storage backup
-    const savedSandboxJE = localStorage.getItem(`conexerp_sandbox_journal_entries_${userId}`);
+    // 2. Recover custom journal entries list for active company
+    const savedCompanyJE = localStorage.getItem(`finex_company_${companyId}_journal_entries`);
     let initialJEList = INITIAL_JOURNAL_ENTRIES;
-    if (savedSandboxJE) {
+    if (savedCompanyJE) {
       try {
-        const parsedJE = JSON.parse(savedSandboxJE);
-        if (Array.isArray(parsedJE) && parsedJE.length > 0) {
+        const parsedJE = JSON.parse(savedCompanyJE);
+        if (Array.isArray(parsedJE)) {
           initialJEList = parsedJE;
           setJournalEntries(parsedJE);
         } else {
           setJournalEntries(INITIAL_JOURNAL_ENTRIES);
         }
       } catch (e) {
-        console.error('Error loading sandbox journal entries:', e);
+        console.error('Error loading company journal entries:', e);
         setJournalEntries(INITIAL_JOURNAL_ENTRIES);
       }
     } else {
-      setJournalEntries(INITIAL_JOURNAL_ENTRIES);
+      const isDefault = companyId === 'comp-finex-default';
+      const initialSet = isDefault ? INITIAL_JOURNAL_ENTRIES : [];
+      setJournalEntries(initialSet);
+      localStorage.setItem(`finex_company_${companyId}_journal_entries`, JSON.stringify(initialSet));
     }
     
-    // 3. Recover business action audit logs list from local storage backup
-    const savedSandboxLogs = localStorage.getItem(`conexerp_sandbox_audit_logs_${userId}`);
+    // 3. Recover business action audit logs list for active company
+    const savedCompanyLogs = localStorage.getItem(`finex_company_${companyId}_audit_logs`);
     let initialLogsList: AuditLog[] = [];
-    if (savedSandboxLogs) {
+    if (savedCompanyLogs) {
       try {
-        const parsedLogs = JSON.parse(savedSandboxLogs);
+        const parsedLogs = JSON.parse(savedCompanyLogs);
         if (Array.isArray(parsedLogs) && parsedLogs.length > 0) {
           initialLogsList = parsedLogs;
           setAuditLogs(parsedLogs);
         }
       } catch (e) {
-        console.error('Error loading sandbox audit logs:', e);
+        console.error('Error loading company audit logs:', e);
       }
     }
 
     if (initialLogsList.length === 0) {
-      // Bootstrap initial audit ledger logs
       initialLogsList = [
         {
-          id: `L-INIT-01-${userId}`,
+          id: `L-INIT-01-${companyId}`,
           timestamp: new Date(Date.now() - 360000000).toISOString(),
           action: 'CREATE',
           actor: 'audit-automaton@finexerp.io',
-          details: 'Enterprise Ledger environment initialized. Chart of Accounts registered in database.'
-        },
-        ...initialJEList.map((entry, idx) => ({
-          id: `L-INIT-JE-${idx}-${userId}`,
-          timestamp: entry.createdAt,
-          action: 'CREATE' as const,
-          actor: entry.createdBy,
-          details: `Imported initial historical journal entry block ref: ${entry.reference}. Balanced amount: $${(entry.lines.reduce((s, c) => s + c.debit, 0) / 100).toFixed(2)}`,
-          targetId: entry.id
-        }))
+          details: `Enterprise Ledger environment initialized for company [${activeCompany.name}]. Currency: ${activeCompany.currency}, Accounting: ${activeCompany.accountingMethod}.`
+        }
       ];
       setAuditLogs(initialLogsList);
-      localStorage.setItem(`conexerp_sandbox_audit_logs_${userId}`, JSON.stringify(initialLogsList));
+      localStorage.setItem(`finex_company_${companyId}_audit_logs`, JSON.stringify(initialLogsList));
     }
-  }, [session]);
+  }, [session, activeCompany?.id]);
 
   // Log successful login events when session state is registered and active
   useEffect(() => {
@@ -1042,6 +1080,38 @@ export default function App() {
     }
   };
 
+  const [globalSearchQuery, setGlobalSearchQuery] = useState<string>('');
+
+  const handleSelectMegaMenuAction = (key: QboMenuKey) => {
+    setIsMegaMenuOpen(false);
+    if (key === 'chart-of-accounts') {
+      setActiveTab('accounts');
+    } else if (key === 'audit-log') {
+      setActiveTab('audit');
+    } else if (key === 'switch-company') {
+      setIsCompanyDropdownOpen(true);
+    } else if (key === 'whats-new') {
+      setIsVideoTutorialsOpen(true);
+    } else {
+      setActiveSettingsModalTab(key);
+    }
+  };
+
+  const handleImportAccounts = (newAccounts: Account[]) => {
+    if (!activeCompany) return;
+    const companyId = activeCompany.id;
+    setAccounts(newAccounts);
+    localStorage.setItem(`finex_company_${companyId}_accounts`, JSON.stringify(newAccounts));
+  };
+
+  const searchMatches = useMemo(() => {
+    if (!globalSearchQuery.trim()) return { accounts: [], entries: [] };
+    const q = globalSearchQuery.toLowerCase().trim();
+    const matchedAccts = accounts.filter(a => a.name.toLowerCase().includes(q) || a.id.toLowerCase().includes(q)).slice(0, 4);
+    const matchedEntries = journalEntries.filter(j => j.reference.toLowerCase().includes(q) || j.description.toLowerCase().includes(q)).slice(0, 4);
+    return { accounts: matchedAccts, entries: matchedEntries };
+  }, [globalSearchQuery, accounts, journalEntries]);
+
   // Sidebar navigation options list helper
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -1200,6 +1270,223 @@ export default function App() {
       {/* DETAILED CONTENT AREA WRAPPER */}
       <div className="flex-1 flex flex-col min-w-0 min-h-screen">
         
+        {/* QUICKBOOKS ONLINE STYLE TOP BAR */}
+        <header className="bg-[#121214] border-b border-zinc-800 px-4 sm:px-6 h-14 flex items-center justify-between shrink-0 relative z-30 select-none">
+          {/* Left: Company Switcher Dropdown */}
+          <div className="relative">
+            <button
+              onClick={() => setIsCompanyDropdownOpen(!isCompanyDropdownOpen)}
+              className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-zinc-800/80 border border-transparent hover:border-zinc-700 transition-colors text-left cursor-pointer group"
+              title="Click to switch legal entity / company"
+            >
+              <div className="w-7 h-7 rounded bg-blue-600/20 border border-blue-500/30 flex items-center justify-center text-blue-400 shrink-0">
+                <Building2 className="w-4 h-4" />
+              </div>
+              <div className="flex flex-col">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs font-bold text-zinc-100 max-w-[160px] sm:max-w-[220px] truncate">
+                    {activeCompany?.name || 'Apex Global Technologies'}
+                  </span>
+                  <ChevronDown className={`w-3.5 h-3.5 text-zinc-400 group-hover:text-zinc-200 transition-transform ${isCompanyDropdownOpen ? 'rotate-180' : ''}`} />
+                </div>
+                <span className="text-[10px] text-zinc-400 font-mono">
+                  {activeCompany?.currency || 'USD'} ({activeCompany?.currencySymbol || '$'}) • {activeCompany?.accountingMethod || 'Accrual'}
+                </span>
+              </div>
+            </button>
+
+            {/* Dropdown Menu */}
+            {isCompanyDropdownOpen && (
+              <div className="absolute left-0 mt-2 w-80 bg-[#18181b] border border-zinc-700 rounded-xl shadow-2xl p-2 z-50 animate-in fade-in slide-in-from-top-2">
+                <div className="px-3 py-2 border-b border-zinc-800 flex items-center justify-between">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                    Switch Legal Entity ({companies.length})
+                  </span>
+                  <span className="text-[10px] text-blue-400 font-mono">Multi-Company</span>
+                </div>
+
+                <div className="max-h-60 overflow-y-auto py-1 space-y-1">
+                  {companies.map(c => {
+                    const isSelected = c.id === activeCompanyId;
+                    return (
+                      <button
+                        key={c.id}
+                        onClick={() => {
+                          setActiveCompanyId(c.id);
+                          setIsCompanyDropdownOpen(false);
+                        }}
+                        className={`w-full text-left p-2.5 rounded-lg flex items-center justify-between text-xs transition-colors cursor-pointer ${
+                          isSelected ? 'bg-blue-600 text-white shadow-xs' : 'hover:bg-zinc-800 text-zinc-300'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5 truncate">
+                          <Building2 className={`w-4 h-4 shrink-0 ${isSelected ? 'text-white' : 'text-zinc-400'}`} />
+                          <div className="truncate">
+                            <p className="font-semibold truncate">{c.name}</p>
+                            <p className={`text-[10px] ${isSelected ? 'text-blue-100' : 'text-zinc-400'}`}>
+                              {c.currency} • {c.industry}
+                            </p>
+                          </div>
+                        </div>
+                        {isSelected && <Check className="w-4 h-4 text-white shrink-0 ml-2" />}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="border-t border-zinc-800 pt-2 mt-1 space-y-1">
+                  <button
+                    onClick={() => {
+                      setIsCompanyDropdownOpen(false);
+                      setActiveSettingsModalTab('account-settings');
+                    }}
+                    className="w-full text-left px-3 py-2 rounded-lg text-xs text-zinc-300 hover:text-white hover:bg-zinc-800 flex items-center gap-2 transition-colors cursor-pointer"
+                  >
+                    <Sliders className="w-3.5 h-3.5 text-zinc-400" />
+                    <span>Company Settings & Period Lock</span>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Center: Global Search Bar */}
+          <div className="hidden lg:flex items-center flex-1 max-w-md mx-6 relative">
+            <div className="relative w-full">
+              <Search className="w-3.5 h-3.5 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                placeholder="Search accounts, journal entries, ref #..."
+                value={globalSearchQuery}
+                onChange={(e) => setGlobalSearchQuery(e.target.value)}
+                className="w-full bg-[#18181b] border border-zinc-800 focus:border-blue-500 text-zinc-200 placeholder-zinc-500 text-xs rounded-lg pl-9 pr-3 py-1.5 focus:outline-none transition-colors"
+              />
+              {globalSearchQuery && (
+                <button
+                  onClick={() => setGlobalSearchQuery('')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+
+            {/* Quick Search Floating Results Dropdown */}
+            {globalSearchQuery.trim() && (
+              <div className="absolute left-0 right-0 top-full mt-2 bg-[#18181b] border border-zinc-700 rounded-xl shadow-2xl p-2 z-50 text-xs animate-in fade-in">
+                <div className="p-2 border-b border-zinc-800 text-[10px] uppercase font-bold text-zinc-400">
+                  Search Results for "{globalSearchQuery}"
+                </div>
+                {searchMatches.accounts.length === 0 && searchMatches.entries.length === 0 ? (
+                  <p className="p-3 text-zinc-500 text-center">No matching accounts or transactions found.</p>
+                ) : (
+                  <div className="space-y-2 py-1 max-h-60 overflow-y-auto">
+                    {searchMatches.accounts.length > 0 && (
+                      <div>
+                        <span className="text-[9px] uppercase tracking-wider text-zinc-500 px-2 font-bold font-mono">Accounts</span>
+                        {searchMatches.accounts.map(a => (
+                          <button
+                            key={a.id}
+                            onClick={() => {
+                              setActiveTab('accounts');
+                              setGlobalSearchQuery('');
+                            }}
+                            className="w-full text-left px-2 py-1.5 hover:bg-zinc-800 rounded flex items-center justify-between text-zinc-300 hover:text-white cursor-pointer"
+                          >
+                            <span className="font-medium">#{a.id} - {a.name}</span>
+                            <span className="text-[10px] text-zinc-500">{a.class}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {searchMatches.entries.length > 0 && (
+                      <div>
+                        <span className="text-[9px] uppercase tracking-wider text-zinc-500 px-2 font-bold font-mono">Journal Entries</span>
+                        {searchMatches.entries.map(j => (
+                          <button
+                            key={j.id}
+                            onClick={() => {
+                              setActiveTab('journal');
+                              setGlobalSearchQuery('');
+                            }}
+                            className="w-full text-left px-2 py-1.5 hover:bg-zinc-800 rounded flex items-center justify-between text-zinc-300 hover:text-white cursor-pointer"
+                          >
+                            <span className="font-mono font-medium text-blue-400">{j.reference}</span>
+                            <span className="text-[10px] text-zinc-400 truncate max-w-[180px]">{j.description}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Right: Actions, Period Lock status, View Mode, Help, Settings Gear */}
+          <div className="flex items-center gap-2 sm:gap-3">
+            {/* Period lock warning badge if books are closed */}
+            {activeCompany?.closeBooks && (
+              <button
+                onClick={() => setActiveSettingsModalTab('account-settings')}
+                className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-amber-500/10 border border-amber-500/30 text-amber-300 hover:bg-amber-500/20 text-[11px] font-medium rounded-full transition-colors cursor-pointer"
+                title={`Books are locked through ${activeCompany.closingDate}. Click to view accounting controls.`}
+              >
+                <Lock className="w-3 h-3 text-amber-400" />
+                <span>Locked: {activeCompany.closingDate}</span>
+              </button>
+            )}
+
+            {/* View Mode Switcher Button */}
+            <button
+              onClick={toggleViewMode}
+              className="flex items-center gap-1.5 px-2.5 py-1 bg-zinc-900 hover:bg-zinc-800 border border-zinc-750 text-zinc-300 hover:text-white text-xs rounded-lg transition-colors cursor-pointer"
+              title="Click to toggle between Business View and Accountant View"
+            >
+              <Briefcase className="w-3.5 h-3.5 text-blue-400" />
+              <span className="hidden sm:inline">
+                {viewMode === 'accountant' ? 'Accountant View' : 'Business View'}
+              </span>
+            </button>
+
+            {/* Help / Academy Video Tutorials */}
+            <button
+              onClick={() => setIsVideoTutorialsOpen(true)}
+              className="p-2 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-750 text-zinc-300 hover:text-white transition-colors cursor-pointer flex items-center justify-center"
+              title="Help & Interactive Video Tutorials"
+            >
+              <HelpCircle className="w-4 h-4" />
+            </button>
+
+            {/* QBO Gear Icon (Mega Menu) */}
+            <div className="relative">
+              <button
+                id="qbo-gear-settings-button"
+                onClick={() => setIsMegaMenuOpen(!isMegaMenuOpen)}
+                className={`p-2 rounded-lg border transition-colors cursor-pointer flex items-center justify-center ${
+                  isMegaMenuOpen 
+                    ? 'bg-blue-600 border-blue-500 text-white shadow-md' 
+                    : 'bg-zinc-900 hover:bg-zinc-800 border-zinc-750 text-zinc-300 hover:text-white'
+                }`}
+                title="QuickBooks Online Settings (Gear Menu)"
+              >
+                <Settings className={`w-4 h-4 ${isMegaMenuOpen ? 'animate-spin-slow text-white' : ''}`} />
+              </button>
+
+              {/* Mega Menu Dropdown */}
+              <QboSettingsMegaMenu
+                isOpen={isMegaMenuOpen}
+                onClose={() => setIsMegaMenuOpen(false)}
+                onSelectAction={handleSelectMegaMenuAction}
+                onOpenTutorials={() => {
+                  setIsMegaMenuOpen(false);
+                  setIsVideoTutorialsOpen(true);
+                }}
+              />
+            </div>
+          </div>
+        </header>
+        
         <main className="flex-1 p-4 sm:p-6 lg:p-8 overflow-y-auto w-full max-w-7xl mx-auto">
           
           {activeTab === 'dashboard' && (
@@ -1278,6 +1565,7 @@ export default function App() {
                 accounts={accounts} 
                 entries={journalEntries} 
                 session={session}
+                company={activeCompany}
               />
             </div>
           )}
@@ -1303,6 +1591,22 @@ export default function App() {
         </footer>
 
       </div>
+
+      {/* COMPANY SETTINGS & QBO SUB-MODALS */}
+      <CompanySettingsModal
+        isOpen={Boolean(activeSettingsModalTab)}
+        initialKey={(activeSettingsModalTab as QboMenuKey) || 'account-settings'}
+        onClose={() => setActiveSettingsModalTab(null)}
+        accounts={accounts}
+        journalEntries={journalEntries}
+        onImportAccounts={handleImportAccounts}
+      />
+
+      {/* VIDEO TUTORIALS MODAL */}
+      <VideoTutorialsModal
+        isOpen={isVideoTutorialsOpen}
+        onClose={() => setIsVideoTutorialsOpen(false)}
+      />
 
     </div>
     </ProtectedRoute>

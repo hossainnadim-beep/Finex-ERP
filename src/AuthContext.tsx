@@ -4,7 +4,7 @@
  */
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { supabase, isSupabaseConfigured } from './supabaseClient';
+import { supabase, isSupabaseConfigured, clearStaleSupabaseSession } from './supabaseClient';
 import { UserSession } from './types';
 import SupabaseAuth from './components/SupabaseAuth';
 
@@ -41,8 +41,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const initAuth = async () => {
       if (isSupabaseConfigured && supabase) {
         try {
-          const { data: { session: activeSession } } = await supabase.auth.getSession();
-          if (activeSession?.user) {
+          const { data, error: sessionError } = await supabase.auth.getSession();
+          if (sessionError) {
+            console.warn('Supabase session verification notice:', sessionError.message);
+            const errMsg = sessionError.message || '';
+            if (
+              errMsg.toLowerCase().includes('refresh') ||
+              errMsg.toLowerCase().includes('token') ||
+              errMsg.toLowerCase().includes('grant') ||
+              sessionError.status === 400
+            ) {
+              clearStaleSupabaseSession();
+              await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
+              setSession(null);
+              setUser(null);
+              setSupabaseSession(null);
+            }
+          } else if (data?.session?.user) {
+            const activeSession = data.session;
             const userSession: UserSession = {
               user: {
                 id: activeSession.user.id,
@@ -57,12 +73,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               email: activeSession.user.email || 'user@supabase.co'
             });
             setSupabaseSession(activeSession);
+          } else {
+            setSession(null);
+            setUser(null);
+            setSupabaseSession(null);
           }
-        } catch (error) {
-          console.error('Error retrieving active Supabase session:', error);
+        } catch (error: any) {
+          console.warn('Notice during Supabase session initialization:', error);
+          const errMsg = error?.message || '';
+          if (errMsg.toLowerCase().includes('refresh') || errMsg.toLowerCase().includes('token')) {
+            clearStaleSupabaseSession();
+            await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
+          }
+          setSession(null);
+          setUser(null);
+          setSupabaseSession(null);
         }
 
-        const { data: { subscription } } = supabase.auth.onAuthStateChange((event, currentSession) => {
+        const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, currentSession) => {
           if (event === 'PASSWORD_RECOVERY') {
             setIsPasswordRecovery(true);
           }
@@ -82,7 +110,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               email: currentSession.user.email || 'user@supabase.co'
             });
             setSupabaseSession(currentSession);
-          } else if (event === 'SIGNED_OUT') {
+          } else if (event === 'SIGNED_OUT' || !currentSession) {
             setSession(null);
             setUser(null);
             setSupabaseSession(null);
@@ -107,9 +135,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       try {
         await supabase.auth.signOut();
       } catch (err) {
-        console.error('Error during signOut:', err);
+        try {
+          await supabase.auth.signOut({ scope: 'local' });
+        } catch (_) {}
       }
     }
+    clearStaleSupabaseSession();
     setSession(null);
     setUser(null);
     setSupabaseSession(null);

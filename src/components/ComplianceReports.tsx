@@ -3,515 +3,407 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useMemo } from 'react';
-import { Account, JournalEntry, UserSession } from '../types';
-import { 
-  BarChart3, 
-  FileCheck, 
-  AlertCircle, 
-  TrendingUp, 
-  DollarSign, 
-  Printer, 
-  Archive, 
-  FileText,
-  Activity
-} from 'lucide-react';
+import React, { useState, useMemo, useRef } from 'react';
+import { Account, JournalEntry, UserSession, CompanySettings } from '../types';
+import { useCompany } from '../CompanyContext';
+import { ReportPeriodPreset, getPresetDateRange } from './reports/reportUtils';
+import StandardReportsList, { ReportId } from './reports/StandardReportsList';
+import FocusedReportToolbar from './reports/FocusedReportToolbar';
+
+import BalanceSheetReport from './reports/BalanceSheetReport';
+import IncomeStatementReport from './reports/IncomeStatementReport';
+import CashFlowReport from './reports/CashFlowReport';
+import TrialBalanceReport from './reports/TrialBalanceReport';
+import GeneralLedgerReport from './reports/GeneralLedgerReport';
+import ChangesInEquityReport from './reports/ChangesInEquityReport';
+import AgingReport from './reports/AgingReport';
+import TransactionReport from './reports/TransactionReport';
+
+export type ReportType = ReportId;
 
 interface ComplianceReportsProps {
   accounts: Account[];
   entries: JournalEntry[];
   session: UserSession | null;
+  company?: CompanySettings | null;
 }
 
-export default function ComplianceReports({ accounts, entries, session }: ComplianceReportsProps) {
-  const [reportType, setReportType] = useState<'balancesheet' | 'income'>('balancesheet');
+const REPORT_NAMES: Record<ReportType, string> = {
+  balancesheet: 'Balance Sheet Report',
+  income: 'Profit and Loss Report',
+  cashflow: 'Statement of Cash Flows Report',
+  equity: "Statement of Stockholders' Equity Report",
+  trialbalance: 'Trial Balance Report',
+  generalledger: 'General Ledger Detail Report',
+  ar_aging: 'A/R Aging Summary Report',
+  ap_aging: 'A/P Aging Summary Report',
+  transaction_report: 'Transaction Detail by Account'
+};
 
-  // Compute account balances dynamically in real time
-  const accountBalances = useMemo(() => {
-    const balances: Record<string, { debits: number; credits: number; final: number }> = {};
+export default function ComplianceReports({
+  accounts,
+  entries,
+  session,
+  company: propCompany
+}: ComplianceReportsProps) {
+  const { activeCompany: contextCompany } = useCompany();
+  const activeCompany = propCompany || contextCompany;
 
-    accounts.forEach(acc => {
-      balances[acc.id] = { debits: 0, credits: 0, final: 0 };
-    });
+  // By default, open the standard reports list page first!
+  const [selectedReport, setSelectedReport] = useState<ReportType | null>(null);
+  const [previousReport, setPreviousReport] = useState<ReportType | null>(null);
+  const [drillDownAccountId, setDrillDownAccountId] = useState<string | undefined>(undefined);
 
-    entries.forEach(entry => {
-      entry.lines.forEach(line => {
-        if (!balances[line.accountId]) {
-          balances[line.accountId] = { debits: 0, credits: 0, final: 0 };
-        }
-        balances[line.accountId].debits += line.debit;
-        balances[line.accountId].credits += line.credit;
-      });
-    });
-
-    accounts.forEach(acc => {
-      const b = balances[acc.id] || { debits: 0, credits: 0, final: 0 };
-      if (acc.normalBalance === 'Debit') {
-        b.final = b.debits - b.credits;
-      } else {
-        b.final = b.credits - b.debits;
-      }
-    });
-
-    return balances;
-  }, [entries, accounts]);
-
-  // Compute report aggregates
-  const summary = useMemo(() => {
-    let totalAssets = 0;
-    let totalLiabilities = 0;
-    let totalEquity = 0;
-    let totalRevenue = 0;
-    let totalExpenses = 0;
-
-    accounts.forEach(acc => {
-      const bal = accountBalances[acc.id]?.final || 0;
-      switch (acc.class) {
-        case 'Asset':
-          totalAssets += bal;
-          break;
-        case 'Liability':
-          totalLiabilities += bal;
-          break;
-        case 'Equity':
-          totalEquity += bal;
-          break;
-        case 'Revenue':
-          totalRevenue += bal;
-          break;
-        case 'Expense':
-          totalExpenses += bal;
-          break;
-      }
-    });
-
-    const netIncome = totalRevenue - totalExpenses;
-    const finalEquityIncludingNetIncome = totalEquity + netIncome;
-    const balanceAlert = Math.abs(totalAssets - (totalLiabilities + finalEquityIncludingNetIncome));
-
-    return {
-      totalAssets,
-      totalLiabilities,
-      totalEquity,
-      totalRevenue,
-      totalExpenses,
-      netIncome,
-      finalEquityIncludingNetIncome,
-      isEquationBalanced: balanceAlert === 0,
-      balanceAlertCents: balanceAlert
-    };
-  }, [accountBalances, accounts]);
-
-  const formatCurrency = (cents: number): string => {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD'
-    }).format(cents / 100);
+  const handleDrillDown = (accountId?: string) => {
+    setPreviousReport(selectedReport);
+    setDrillDownAccountId(accountId);
+    setSelectedReport('transaction_report');
   };
 
-  const [printLayout, setPrintLayout] = useState<'grid' | 'classic'>('grid');
-  const [includeSignatures, setIncludeSignatures] = useState<boolean>(true);
+  // Date filters
+  const todayStr = new Date().toISOString().split('T')[0];
+  const [selectedPreset, setSelectedPreset] = useState<ReportPeriodPreset>('this_year_ytd');
+  
+  const initialPresetRange = useMemo(() => getPresetDateRange('this_year_ytd'), []);
+  const [startDate, setStartDate] = useState<string>(initialPresetRange.startDate);
+  const [endDate, setEndDate] = useState<string>(initialPresetRange.endDate);
+  const [asOfDate, setAsOfDate] = useState<string>(todayStr);
+
+  // Accounting Basis: Accrual vs Cash
+  const defaultBasis = (activeCompany?.accountingMethod === 'Cash') ? 'Cash' : 'Accrual';
+  const [accountingBasis, setAccountingBasis] = useState<'Accrual' | 'Cash'>(defaultBasis);
+
+  // Focused Toolbar options
+  const [displayColumnsBy, setDisplayColumnsBy] = useState<'total_only' | 'months' | 'quarters' | 'years'>('total_only');
+  const [showNonZero, setShowNonZero] = useState<'active' | 'nonzero' | 'all'>('active');
+  const [comparePeriod, setComparePeriod] = useState<'none' | 'previous_period' | 'previous_year' | 'percent_change'>('none');
+  const [allCollapsed, setAllCollapsed] = useState<boolean>(false);
+  const [sortOrder, setSortOrder] = useState<'default' | 'name' | 'amount_desc'>('default');
+  const [isModernView, setIsModernView] = useState<boolean>(true);
+
+  // Editable titles and custom notes
+  const [customCompanyName, setCustomCompanyName] = useState<string>('');
+  const [customReportTitle, setCustomReportTitle] = useState<string>('');
+  const [customNotes, setCustomNotes] = useState<string>('');
+
+  // Options toggles
   const [includeNotes, setIncludeNotes] = useState<boolean>(true);
-  const [pageBreakBetween, setPageBreakBetween] = useState<boolean>(false);
+  const [includeSignatures, setIncludeSignatures] = useState<boolean>(true);
+  const collapseZeroBalances = showNonZero === 'active' || showNonZero === 'nonzero';
+
+  const reportContainerRef = useRef<HTMLDivElement>(null);
+
+  // Handle Preset Change
+  const handleSelectPreset = (preset: ReportPeriodPreset) => {
+    setSelectedPreset(preset);
+    if (preset !== 'custom') {
+      const range = getPresetDateRange(preset);
+      setStartDate(range.startDate);
+      setEndDate(range.endDate);
+      setAsOfDate(range.endDate);
+    }
+  };
+
+  // Determine date type: Point-in-time ('as_of') vs Period-of-time ('period')
+  const dateType: 'as_of' | 'period' = useMemo(() => {
+    if (selectedReport && ['balancesheet', 'trialbalance', 'ar_aging', 'ap_aging'].includes(selectedReport)) {
+      return 'as_of';
+    }
+    return 'period';
+  }, [selectedReport]);
 
   const handlePrint = () => {
     window.print();
   };
 
+  const handleJumpToLast = () => {
+    if (reportContainerRef.current) {
+      reportContainerRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    }
+  };
+
+  // Export CSV handler
+  const handleExportCSV = () => {
+    if (!selectedReport) return;
+    const companyName = customCompanyName || activeCompany?.legalName || activeCompany?.name || 'Whistling_Wind_Counseling_and_Therapy_Services_Inc';
+    const cleanCompany = companyName.replace(/[^a-zA-Z0-9]/g, '_');
+    const filename = `${cleanCompany}_${selectedReport}_${dateType === 'as_of' ? asOfDate : `${startDate}_to_${endDate}`}.csv`;
+
+    let csvContent = `data:text/csv;charset=utf-8,`;
+    csvContent += `"${companyName}"\r\n`;
+    csvContent += `"${selectedReport.toUpperCase()} REPORT"\r\n`;
+    csvContent += `"${dateType === 'as_of' ? `As of: ${asOfDate}` : `Period: ${startDate} to ${endDate}`}"\r\n`;
+    csvContent += `"Accounting Basis: ${accountingBasis}"\r\n\r\n`;
+
+    if (selectedReport === 'trialbalance') {
+      csvContent += `"Account Code","Account Name","Class","Debit","Credit"\r\n`;
+      accounts.forEach(acc => {
+        csvContent += `"${acc.id}","${acc.name}","${acc.class}",""\r\n`;
+      });
+    } else {
+      csvContent += `"Account / Line Item","Category","Amount"\r\n`;
+      accounts.forEach(acc => {
+        csvContent += `"${acc.name}","${acc.class}",""\r\n`;
+      });
+    }
+
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', filename);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // Synthetic or custom company settings passed down to report headers
+  const effectiveCompany: CompanySettings = useMemo(() => {
+    const baseName = customCompanyName || activeCompany?.legalName || activeCompany?.name || 'Whistling Wind Counseling and Therapy Services Inc';
+    return {
+      id: activeCompany?.id || 'default_co',
+      name: baseName,
+      legalName: baseName,
+      taxId: activeCompany?.taxId || '',
+      currency: activeCompany?.currency || 'USD',
+      currencySymbol: activeCompany?.currencySymbol || '$',
+      fiscalYearStartMonth: activeCompany?.fiscalYearStartMonth || 1,
+      accountingMethod: accountingBasis,
+      address: activeCompany?.address || {
+        street: '100 Enterprise Way',
+        city: 'San Francisco',
+        state: 'CA',
+        zipCode: '94105',
+        country: 'USA'
+      },
+      phone: activeCompany?.phone || '',
+      email: activeCompany?.email || '',
+      website: activeCompany?.website || '',
+      companyType: activeCompany?.companyType || 'Corporation'
+    };
+  }, [activeCompany, customCompanyName, accountingBasis]);
+
+  // IF NO REPORT IS SELECTED: Show standard reports directory
+  if (!selectedReport) {
+    return (
+      <StandardReportsList
+        company={activeCompany || null}
+        accounts={accounts}
+        entries={entries}
+        onSelectReport={(rep) => {
+          setSelectedReport(rep);
+          setPreviousReport(null);
+          setDrillDownAccountId(undefined);
+          setCustomReportTitle(''); // Reset any custom title to default for new report
+        }}
+      />
+    );
+  }
+
+  // IF TRANSACTION DETAIL REPORT IS SELECTED (Drill-down or direct)
+  if (selectedReport === 'transaction_report') {
+    return (
+      <div className="animate-fade-in">
+        <TransactionReport
+          company={effectiveCompany}
+          accounts={accounts}
+          entries={entries}
+          initialAccountId={drillDownAccountId}
+          startDate={startDate}
+          endDate={endDate}
+          accountingBasis={accountingBasis}
+          previousReportTitle={previousReport ? REPORT_NAMES[previousReport] : 'report list'}
+          onBack={() => {
+            if (previousReport) {
+              setSelectedReport(previousReport);
+              setPreviousReport(null);
+            } else {
+              setSelectedReport(null);
+            }
+          }}
+          currencySymbol={effectiveCompany.currencySymbol}
+        />
+      </div>
+    );
+  }
+
+  // FOCUSED SPECIFIC REPORT VIEW
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       
-      {/* Tab select & printable controls */}
-      <div className="bg-[#121214] rounded border border-zinc-800 p-4 shadow-sm flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 select-none">
-        
-        <div className="flex items-center gap-2">
-          <BarChart3 className="h-4.5 w-4.5 text-blue-500" />
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-355">Compliance Statement Reports</h3>
-        </div>
+      {/* Focused QuickBooks-style Header & Filter Toolbar */}
+      <FocusedReportToolbar
+        reportTitle={REPORT_NAMES[selectedReport]}
+        onBackToReportsList={() => setSelectedReport(null)}
+        dateType={dateType}
+        selectedPreset={selectedPreset}
+        onSelectPreset={handleSelectPreset}
+        asOfDate={asOfDate}
+        onChangeAsOfDate={setAsOfDate}
+        startDate={startDate}
+        onChangeStartDate={setStartDate}
+        endDate={endDate}
+        onChangeEndDate={setEndDate}
+        accountingBasis={accountingBasis}
+        onChangeAccountingBasis={setAccountingBasis}
+        displayColumnsBy={displayColumnsBy}
+        onChangeDisplayColumns={setDisplayColumnsBy}
+        showNonZero={showNonZero}
+        onChangeShowNonZero={setShowNonZero}
+        comparePeriod={comparePeriod}
+        onChangeComparePeriod={setComparePeriod}
+        onRunReport={() => {
+          // Re-trigger calculation
+          if (dateType === 'period') {
+            setStartDate(s => s);
+            setEndDate(e => e);
+          } else {
+            setAsOfDate(a => a);
+          }
+        }}
+        onPrint={handlePrint}
+        onExportCSV={handleExportCSV}
+        onJumpToLast={handleJumpToLast}
+        allCollapsed={allCollapsed}
+        onToggleCollapseAll={() => setAllCollapsed(!allCollapsed)}
+        sortOrder={sortOrder}
+        onChangeSortOrder={setSortOrder}
+        isModernView={isModernView}
+        onToggleModernView={() => setIsModernView(!isModernView)}
+        customCompanyName={customCompanyName}
+        onChangeCustomCompanyName={setCustomCompanyName}
+        customReportTitle={customReportTitle}
+        onChangeCustomReportTitle={setCustomReportTitle}
+        customNotes={customNotes}
+        onChangeCustomNotes={setCustomNotes}
+      />
 
-        <div className="flex items-center gap-3">
-          {/* Statement Select */}
-          <div className="flex rounded bg-zinc-900 p-1 border border-zinc-805 text-xs select-none">
-            <button
-              onClick={() => setReportType('balancesheet')}
-              className={`px-3.5 py-1.5 font-medium rounded transition-all cursor-pointer ${
-                reportType === 'balancesheet' 
-                  ? 'bg-zinc-800 text-zinc-100 font-semibold' 
-                  : 'text-zinc-500 hover:text-zinc-300'
-              }`}
-              id="report-select-balancesheet"
-            >
-              Balance Sheet
-            </button>
-            <button
-              onClick={() => setReportType('income')}
-              className={`px-3.5 py-1.5 font-medium rounded transition-all cursor-pointer ${
-                reportType === 'income' 
-                  ? 'bg-zinc-800 text-zinc-100 font-semibold' 
-                  : 'text-zinc-500 hover:text-zinc-300'
-              }`}
-              id="report-select-income"
-            >
-              Income Statement (P&L)
-            </button>
-          </div>
-
-          <button
-            onClick={handlePrint}
-            className="p-1.5 bg-zinc-900 border border-zinc-800 hover:border-zinc-702 text-zinc-400 hover:text-white rounded text-xs transition-colors cursor-pointer flex items-center gap-1 font-semibold"
-            title="Print Current Statement"
-          >
-            <Printer className="h-3.5 w-3.5" />
-            <span className="hidden xs:inline">Print</span>
-          </button>
-        </div>
-
-      </div>
-
-      {/* Interactive Print Options Configuration Dashboard Panel (Hidden during Print) */}
-      <div className="bg-[#121214] border border-zinc-800 rounded-lg p-5 shadow-md flex flex-col gap-4 print:hidden animate-fade-in">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-zinc-850 pb-2.5 gap-2">
-          <div className="flex items-center gap-2">
-            <Activity className="h-4 w-4 text-emerald-500" />
-            <span className="text-xs font-bold uppercase tracking-wider text-zinc-200">GAAP Statement Print &amp; Pagination Setup</span>
-          </div>
-          <span className="text-[10px] font-mono text-zinc-500 uppercase">Live config previews dynamically below</span>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs">
-          {/* Layout Presentation */}
-          <div className="flex flex-col gap-1.5">
-            <span className="text-zinc-400 font-semibold uppercase tracking-wider text-[10px]">Print Layout Presentation</span>
-            <select
-              value={printLayout}
-              onChange={(e) => setPrintLayout(e.target.value as 'grid' | 'classic')}
-              className="bg-zinc-950 border border-zinc-850 text-zinc-200 rounded p-2 text-xs font-sans w-full cursor-pointer focus:border-blue-500 focus:outline-none focus:ring-0"
-            >
-              <option value="classic">Standard Vertical (Recommended for PDF / Paper)</option>
-              <option value="grid">Side-by-Side Dual Column (Widescreen)</option>
-            </select>
-          </div>
-
-          {/* Setup toggles */}
-          <div className="flex items-center">
-            <label className="flex items-center gap-2.5 text-zinc-300 hover:text-zinc-100 cursor-pointer select-none transition-colors">
-              <input
-                type="checkbox"
-                checked={includeSignatures}
-                onChange={(e) => setIncludeSignatures(e.target.checked)}
-                className="rounded text-blue-500 bg-zinc-900 border-zinc-800 h-4 w-4 cursor-pointer focus:ring-0"
-              />
-              <span>Include Auditor Signoffs</span>
-            </label>
-          </div>
-
-          <div className="flex items-center">
-            <label className="flex items-center gap-2.5 text-zinc-300 hover:text-zinc-100 cursor-pointer select-none transition-colors">
-              <input
-                type="checkbox"
-                checked={includeNotes}
-                onChange={(e) => setIncludeNotes(e.target.checked)}
-                className="rounded text-blue-500 bg-zinc-900 border-zinc-800 h-4 w-4 cursor-pointer focus:ring-0"
-              />
-              <span>Include Disclosures Notes</span>
-            </label>
-          </div>
-
-          <div className="flex items-center">
-            <label className="flex items-center gap-2.5 text-zinc-300 hover:text-zinc-100 cursor-pointer select-none transition-colors" title="Splits Assets and Liabilities into separate pages for physical sheets alignment">
-              <input
-                type="checkbox"
-                checked={pageBreakBetween}
-                onChange={(e) => setPageBreakBetween(e.target.checked)}
-                className="rounded text-blue-500 bg-zinc-900 border-zinc-800 h-4 w-4 cursor-pointer focus:ring-0"
-              />
-              <span>Force Page-Break Pagination</span>
-            </label>
-          </div>
-        </div>
-      </div>
-
-      <div className="bg-[#121214] border border-zinc-800 rounded-lg p-6 shadow-xl space-y-6 print:bg-white print:text-black font-sans">
-        
-        {/* Statement Header */}
-        <div className="text-center pb-6 border-b border-zinc-850 print:border-zinc-300">
-          <span className="text-[10px] text-blue-500 font-bold font-mono tracking-widest uppercase block mb-1">
-            Official GAAP Compliant Entity
-          </span>
-          <h1 className="text-xl font-bold tracking-tight text-zinc-100 print:text-zinc-900">Finex ERP Ledger Systems</h1>
-          <h2 className="text-sm text-zinc-400 print:text-zinc-650 mt-1 uppercase tracking-wider font-semibold">
-            {reportType === 'balancesheet' ? 'Balance Sheet Statement' : 'Profit & Loss Operating Statement'}
-          </h2>
-          <div className="text-[10px] font-mono text-zinc-500 print:text-zinc-500 mt-2">
-            Reporting Date: {new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })} | Time (UTC): {new Date().toISOString().replace('T', ' ').slice(0, 19)}
-          </div>
-        </div>
-
-        {/* Dynamic Inner Statement Views */}
-        {reportType === 'balancesheet' ? (
-          <div className="space-y-6">
-            
-            {/* Balance sheet compliance matching badge */}
-            {summary.isEquationBalanced ? (
-              <div className="p-3.5 bg-blue-950/20 border border-blue-800/40 rounded flex gap-2.5 text-xs text-blue-300 print:bg-blue-50 print:border-blue-200 print:text-blue-800" id="statement-match-alert">
-                <FileCheck className="h-4.5 w-4.5 shrink-0 text-blue-400 mt-0.5" />
-                <div>
-                  <strong className="font-bold block uppercase tracking-wider text-[10px]">Dual-Entry Compliance Met</strong>
-                  <p className="mt-0.5 leading-relaxed font-sans text-[11px]">
-                    All operational assets are perfectly supported by obligations and shareholder capital allocations.
-                  </p>
-                  <div className="font-mono text-blue-400 print:text-blue-600 mt-1.5 text-[11px] font-bold">
-                    Assets ({formatCurrency(summary.totalAssets)}) = Liabilities ({formatCurrency(summary.totalLiabilities)}) + Equity ({formatCurrency(summary.finalEquityIncludingNetIncome)})
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="p-3.5 bg-amber-950/20 border border-amber-850 text-xs text-amber-300 rounded flex gap-2.5 print:bg-amber-50 print:border-amber-200 print:text-amber-800" id="statement-conflict-alert">
-                <AlertCircle className="h-4.5 w-4.5 shrink-0 text-amber-400 mt-0.5" />
-                <div>
-                  <strong className="font-bold block uppercase tracking-wider text-[10px]">Asymmetric Balance Discrepancy Flagged</strong>
-                  <p className="mt-0.5 leading-relaxed text-[11px]">
-                    The current general ledger is asymmetrical. Delta discrepancy: {formatCurrency(summary.balanceAlertCents)}
-                  </p>
-                </div>
-              </div>
-            )}
-
-            <div className={`${printLayout === 'classic' ? 'space-y-8 max-w-2xl mx-auto' : 'grid grid-cols-1 md:grid-cols-2 gap-8'} pt-2`}>
-              
-              {/* Left Side: ASSETS */}
-              <div className="space-y-4 print-break-inside-avoid page-break-avoid">
-                <h4 className="text-[10px] uppercase tracking-wider text-zinc-500 font-bold border-b border-zinc-800 print:border-zinc-300 pb-2 flex justify-between">
-                  <span>Current Enterprise Assets</span>
-                  <span>debit items</span>
-                </h4>
-                
-                <div className="divide-y divide-zinc-900/50 print:divide-zinc-100 space-y-1.5">
-                  {accounts.filter(a => a.class === 'Asset').map(account => {
-                    const val = accountBalances[account.id]?.final || 0;
-                    return (
-                      <div key={account.id} className="flex justify-between items-center text-xs py-1.5 hover:bg-zinc-900/30 px-1 rounded transition-colors">
-                        <div>
-                          <span className="font-semibold text-zinc-250 print:text-zinc-800">{account.name}</span>
-                          <span className="block text-[10px] text-zinc-500 font-mono">#{account.id}</span>
-                        </div>
-                        <span className="font-mono text-zinc-105 print:text-zinc-900 font-bold">{formatCurrency(val)}</span>
-                      </div>
-                    );
-                  })}
-                  
-                  {accounts.filter(a => a.class === 'Asset').length === 0 && (
-                    <div className="text-zinc-500 italic text-[11px] p-2 text-center">No asset accounts found</div>
-                  )}
-                </div>
-
-                <div className="pt-3.5 border-t-2 border-zinc-800 print:border-zinc-900 flex justify-between items-center font-bold text-xs text-zinc-200 print:text-zinc-900 uppercase tracking-wide">
-                  <span>Total Corporate Assets</span>
-                  <span className="font-mono text-blue-400 print:text-blue-700 underline decoration-double decoration-2 text-sm">{formatCurrency(summary.totalAssets)}</span>
-                </div>
-              </div>
-
-              {/* Classic Layout Divider & Optional Page Break Spacer */}
-              {printLayout === 'classic' && (
-                <div className={`print-hidden border-t border-dashed border-zinc-800/40 my-4 ${pageBreakBetween ? 'print-break-before-always page-break-always' : ''}`} />
-              )}
-
-              {/* Right Side: LIABILITIES & EQUITY */}
-              <div className={`space-y-6 print-break-inside-avoid page-break-avoid ${pageBreakBetween && printLayout !== 'classic' ? 'print-break-before-always page-break-always' : ''}`}>
-                
-                {/* LIABILITIES Category */}
-                <div className="space-y-4">
-                  <h4 className="text-[10px] uppercase tracking-wider text-zinc-500 font-bold border-b border-zinc-800 print:border-zinc-300 pb-2 flex justify-between">
-                    <span>Liabilities Obligations</span>
-                    <span>credit items</span>
-                  </h4>
-                  
-                  <div className="divide-y divide-zinc-900/50 print:divide-zinc-100 space-y-1.5">
-                    {accounts.filter(a => a.class === 'Liability').map(account => {
-                      const val = accountBalances[account.id]?.final || 0;
-                      return (
-                        <div key={account.id} className="flex justify-between items-center text-xs py-1.5 hover:bg-zinc-900/30 px-1 rounded transition-colors">
-                          <div>
-                            <span className="font-semibold text-zinc-250 print:text-zinc-800">{account.name}</span>
-                            <span className="block text-[10px] text-zinc-500 font-mono">#{account.id}</span>
-                          </div>
-                          <span className="font-mono text-zinc-105 print:text-zinc-900 font-bold">{formatCurrency(val)}</span>
-                        </div>
-                      );
-                    })}
-                    
-                    {accounts.filter(a => a.class === 'Liability').length === 0 && (
-                      <div className="text-zinc-500 italic text-[11px] p-2 text-center">No liability accounts found</div>
-                    )}
-                  </div>
-                  
-                  <div className="flex justify-between items-center font-bold text-xs text-zinc-400 print:text-zinc-600">
-                    <span>Subtotal Liabilities</span>
-                    <span className="font-mono">{formatCurrency(summary.totalLiabilities)}</span>
-                  </div>
-                </div>
-
-                {/* EQUITY Category */}
-                <div className="space-y-4 pt-1">
-                  <h4 className="text-[10px] uppercase tracking-wider text-zinc-500 font-bold border-b border-zinc-800 print:border-zinc-300 pb-2">
-                    Shareholder's Equity Capital
-                  </h4>
-                  
-                  <div className="divide-y divide-zinc-900/50 print:divide-zinc-100 space-y-1.5">
-                    {accounts.filter(a => a.class === 'Equity').map(account => {
-                      const val = accountBalances[account.id]?.final || 0;
-                      return (
-                        <div key={account.id} className="flex justify-between items-center text-xs py-1.5 hover:bg-zinc-900/30 px-1 rounded transition-colors">
-                          <div>
-                            <span className="font-semibold text-zinc-255 print:text-zinc-800">{account.name}</span>
-                            <span className="block text-[10px] text-zinc-500 font-mono">#{account.id}</span>
-                          </div>
-                          <span className="font-mono text-zinc-105 print:text-zinc-900 font-bold">{formatCurrency(val)}</span>
-                        </div>
-                      );
-                    })}
-
-                    {accounts.filter(a => a.class === 'Equity').length === 0 && (
-                      <div className="text-zinc-500 italic text-[11px] p-2 text-center">No equity accounts found</div>
-                    )}
-
-                    {/* Retained Earnings addition via Net Income */}
-                    <div className="flex justify-between items-center text-xs py-1.5 text-zinc-500 print:text-zinc-500">
-                      <div>
-                        <span className="italic pl-1">Current Period Net Profit surplus</span>
-                        <span className="block text-[10px] font-mono pl-1">retained metrics</span>
-                      </div>
-                      <span className="font-mono font-bold text-zinc-350 print:text-zinc-700">{formatCurrency(summary.netIncome)}</span>
-                    </div>
-                  </div>
-                  
-                  <div className="flex justify-between items-center font-bold text-xs text-zinc-400 print:text-zinc-600 pt-1.5">
-                    <span>Subtotal Shareholder Equity</span>
-                    <span className="font-mono">{formatCurrency(summary.finalEquityIncludingNetIncome)}</span>
-                  </div>
-                </div>
-
-                {/* Combined Liabilities & Equity matching block */}
-                <div className="pt-3 border-t-2 border-zinc-800 print:border-zinc-900 flex justify-between items-center font-bold text-xs text-zinc-200 print:text-zinc-900 uppercase tracking-wide bg-zinc-950/20 print:bg-zinc-50 p-3.5 rounded">
-                  <span>Liabilities + Shareholders Equity</span>
-                  <span className="font-mono text-blue-400 print:text-blue-700 underline decoration-double decoration-2 text-sm text-[12px] print:print-double-underline">{formatCurrency(summary.totalLiabilities + summary.finalEquityIncludingNetIncome)}</span>
-                </div>
-
-              </div>
-
-            </div>
-
-          </div>
-        ) : (
-          <div className="max-w-xl mx-auto space-y-6">
-            
-            <div className="text-center pb-2 border-b border-zinc-850/60 print:border-zinc-200">
-              <span className="text-[10px] font-mono text-zinc-500 block uppercase">Period-to-date Operation Report</span>
-            </div>
-
-            {/* REVENUES Section */}
-            <div className="space-y-4">
-              <h5 className="text-[10px] uppercase tracking-wider text-zinc-500 font-bold border-b border-zinc-850 print:border-zinc-300 pb-1.5 flex justify-between">
-                <span>Enterprise Operating Income</span>
-                <span>Revenue Accounts</span>
-              </h5>
-              
-              <div className="space-y-1.5 font-sans">
-                {accounts.filter(a => a.class === 'Revenue').map(account => {
-                  const val = accountBalances[account.id]?.final || 0;
-                  return (
-                    <div key={account.id} className="flex justify-between items-center text-xs py-1.5 hover:bg-zinc-900/30 px-1 rounded transition-colors">
-                      <div>
-                        <span className="font-semibold text-zinc-250 print:text-zinc-800">{account.name}</span>
-                        <span className="block text-[10px] text-zinc-500 font-mono">#{account.id}</span>
-                      </div>
-                      <span className="font-mono text-zinc-200 print:text-zinc-900">{formatCurrency(val)}</span>
-                    </div>
-                  );
-                })}
-                
-                {accounts.filter(a => a.class === 'Revenue').length === 0 && (
-                  <div className="text-zinc-500 italic text-[11px] p-2 text-center">No revenue accounts registered</div>
-                )}
-              </div>
-              <div className="flex justify-between font-bold text-xs text-zinc-350 print:text-zinc-800 pt-1.5 border-t border-zinc-900/40">
-                <span>Gross Revenue Volume</span>
-                <span className="font-mono text-emerald-400 print:text-emerald-700">{formatCurrency(summary.totalRevenue)}</span>
-              </div>
-            </div>
-
-            {/* EXPENSES Section */}
-            <div className="space-y-4 pt-4">
-              <h5 className="text-[10px] uppercase tracking-wider text-zinc-500 font-bold border-b border-zinc-850 print:border-zinc-300 pb-1.5 flex justify-between">
-                <span>Operating Expenditures &amp; Costs</span>
-                <span>Expense Accounts</span>
-              </h5>
-              
-              <div className="space-y-1.5 font-sans">
-                {accounts.filter(a => a.class === 'Expense').map(account => {
-                  const val = accountBalances[account.id]?.final || 0;
-                  return (
-                    <div key={account.id} className="flex justify-between items-center text-xs py-1.5 hover:bg-zinc-900/30 px-1 rounded transition-colors">
-                      <div>
-                        <span className="font-semibold text-zinc-255 print:text-zinc-800">{account.name}</span>
-                        <span className="block text-[10px] text-zinc-500 font-mono">#{account.id}</span>
-                      </div>
-                      <span className="font-mono text-zinc-200 print:text-zinc-900">{formatCurrency(val)}</span>
-                    </div>
-                  );
-                })}
-                
-                {accounts.filter(a => a.class === 'Expense').length === 0 && (
-                  <div className="text-zinc-500 italic text-[11px] p-2 text-center">No expense accounts registered</div>
-                )}
-              </div>
-              <div className="flex justify-between font-bold text-xs text-zinc-350 print:text-zinc-800 pt-1.5 border-t border-zinc-900/40">
-                <span>Aggregate Total Expenses</span>
-                <span className="font-mono text-red-400 print:text-red-700">({formatCurrency(summary.totalExpenses)})</span>
-              </div>
-            </div>
-
-            {/* NET INCOME SUMMARY */}
-            <div className="pt-4 border-t bg-zinc-950/20 print:bg-zinc-50 p-4 rounded flex justify-between items-center border-zinc-800/80 print:border-zinc-300 font-bold text-xs uppercase tracking-wide">
-              <span className="text-zinc-200 print:text-zinc-900">Net Period Surplus Profit (Loss)</span>
-              <span className={`font-mono text-base ${summary.netIncome >= 0 ? 'text-emerald-400 print:text-emerald-700' : 'text-red-400 print:text-red-700'}`}>
-                {formatCurrency(summary.netIncome)}
-              </span>
-            </div>
-
-          </div>
+      {/* RENDER ACTIVE REPORT SHEET */}
+      <div ref={reportContainerRef} className="animate-fade-in">
+        {selectedReport === 'balancesheet' && (
+          <BalanceSheetReport
+            company={effectiveCompany}
+            accounts={accounts}
+            entries={entries}
+            asOfDate={asOfDate}
+            accountingBasis={accountingBasis}
+            includeNotes={includeNotes}
+            includeSignatures={includeSignatures}
+            collapseZeroBalances={collapseZeroBalances}
+            onDrillDown={handleDrillDown}
+          />
         )}
 
-        {/* Dynamic Footnotes & Disclosures for GAAP Compliance */}
-        {includeNotes && (
-          <div className="border-t border-zinc-850 print:border-zinc-300 pt-6 mt-8 print-break-inside-avoid page-break-avoid font-sans text-xs text-zinc-400 print:text-slate-700 block">
-            <h4 className="text-[10px] uppercase tracking-wider font-bold text-zinc-300 print:text-slate-900 mb-2">Disclosures &amp; Explanatory Accounting Notes</h4>
-            <ol className="list-decimal list-inside space-y-1.5 leading-relaxed text-[11px]">
-              <li><strong>GAAP Metric Standardization:</strong> These dynamic statements are extracted directly from active general ledger aggregates and standardized on the accrual basis of US GAAP.</li>
-              <li><strong>Accruals and Adjustments:</strong> Accounts reflect real-time ledger updates and active double-entry balancing. Reporting compiled at {new Date().toISOString().replace('T', ' ').slice(0, 19)} UTC.</li>
-              <li><strong>Shareholder Equity Integrity:</strong> Strategic balance equity matches operational assets and liability obligations perfectly during system-verified active sessions.</li>
-            </ol>
-          </div>
+        {selectedReport === 'income' && (
+          <IncomeStatementReport
+            company={effectiveCompany}
+            accounts={accounts}
+            entries={entries}
+            startDate={startDate}
+            endDate={endDate}
+            accountingBasis={accountingBasis}
+            includeNotes={includeNotes}
+            includeSignatures={includeSignatures}
+            collapseZeroBalances={collapseZeroBalances}
+            onDrillDown={handleDrillDown}
+          />
         )}
 
-        {/* Dynamic Sign-Off Signatures Block */}
-        {includeSignatures && (
-          <div className="border-t border-zinc-850 print:border-zinc-300 pt-8 mt-10 print-break-inside-avoid page-break-avoid block">
-            <div className="grid grid-cols-2 gap-8 text-xs font-sans pt-4">
-              <div className="text-center">
-                <div className="border-b border-zinc-800 print:border-zinc-400 h-10 w-48 mx-auto" />
-                <span className="block text-[10px] text-zinc-500 print:text-slate-600 uppercase tracking-wider mt-2 font-semibold">Authorized Audit Officer (CFO)</span>
-                <span className="block text-[9px] text-zinc-600 print:text-slate-400 font-mono">Finex Enterprise Authority</span>
-              </div>
-              <div className="text-center">
-                <div className="border-b border-zinc-800 print:border-zinc-400 h-10 w-48 mx-auto" />
-                <span className="block text-[10px] text-zinc-500 print:text-slate-600 uppercase tracking-wider mt-2 font-semibold">Principal Assurance Representative</span>
-                <span className="block text-[9px] text-zinc-600 print:text-slate-400 font-mono">Governed Review Assurances</span>
-              </div>
-            </div>
-          </div>
+        {selectedReport === 'cashflow' && (
+          <CashFlowReport
+            company={effectiveCompany}
+            accounts={accounts}
+            entries={entries}
+            startDate={startDate}
+            endDate={endDate}
+            accountingBasis={accountingBasis}
+            includeNotes={includeNotes}
+            includeSignatures={includeSignatures}
+            onDrillDown={handleDrillDown}
+          />
         )}
 
+        {selectedReport === 'trialbalance' && (
+          <TrialBalanceReport
+            company={effectiveCompany}
+            accounts={accounts}
+            entries={entries}
+            asOfDate={asOfDate}
+            accountingBasis={accountingBasis}
+            includeNotes={includeNotes}
+            includeSignatures={includeSignatures}
+            collapseZeroBalances={collapseZeroBalances}
+            onDrillDown={handleDrillDown}
+          />
+        )}
+
+        {selectedReport === 'generalledger' && (
+          <GeneralLedgerReport
+            company={effectiveCompany}
+            accounts={accounts}
+            entries={entries}
+            startDate={startDate}
+            endDate={endDate}
+            accountingBasis={accountingBasis}
+            includeNotes={includeNotes}
+            includeSignatures={includeSignatures}
+            collapseZeroBalances={collapseZeroBalances}
+            onDrillDown={handleDrillDown}
+          />
+        )}
+
+        {selectedReport === 'equity' && (
+          <ChangesInEquityReport
+            company={effectiveCompany}
+            accounts={accounts}
+            entries={entries}
+            startDate={startDate}
+            endDate={endDate}
+            accountingBasis={accountingBasis}
+            includeNotes={includeNotes}
+            includeSignatures={includeSignatures}
+            onDrillDown={handleDrillDown}
+          />
+        )}
+
+        {selectedReport === 'ar_aging' && (
+          <AgingReport
+            type="ar"
+            company={effectiveCompany}
+            accounts={accounts}
+            entries={entries}
+            asOfDate={asOfDate}
+            accountingBasis={accountingBasis}
+            includeNotes={includeNotes}
+            includeSignatures={includeSignatures}
+            onDrillDown={handleDrillDown}
+          />
+        )}
+
+        {selectedReport === 'ap_aging' && (
+          <AgingReport
+            type="ap"
+            company={effectiveCompany}
+            accounts={accounts}
+            entries={entries}
+            asOfDate={asOfDate}
+            accountingBasis={accountingBasis}
+            includeNotes={includeNotes}
+            includeSignatures={includeSignatures}
+            onDrillDown={handleDrillDown}
+          />
+        )}
+
+        {/* Display Custom Footnotes if entered */}
+        {customNotes && (
+          <div className="mt-4 bg-white border border-slate-200 rounded-lg p-4 text-xs text-slate-700 shadow-xs">
+            <span className="font-bold text-slate-900 block mb-1 text-[11px] uppercase tracking-wider">
+              Management Notes &amp; Disclosures
+            </span>
+            <p className="whitespace-pre-wrap leading-relaxed text-slate-600 font-serif">
+              {customNotes}
+            </p>
+          </div>
+        )}
       </div>
 
     </div>

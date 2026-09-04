@@ -4,8 +4,9 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Account, JournalEntry, JournalLine } from '../types';
+import { Account, JournalEntry, JournalLine, IssuedInvoice } from '../types';
 import { useAuth } from '../AuthContext';
+import { useCompany } from '../CompanyContext';
 import { 
   FileText, 
   Plus, 
@@ -37,20 +38,6 @@ interface InvoiceLineItem {
   rate: number; // Dollars
 }
 
-interface IssuedInvoice {
-  id: string;
-  invoiceNumber: string;
-  customerName: string;
-  invoiceDate: string;
-  dueDate: string;
-  subtotal: number; // Dollars
-  taxRate: number; // Percentage
-  taxAmount: number; // Dollars
-  grandTotal: number; // Dollars
-  journalEntryId: string;
-  lines: InvoiceLineItem[];
-}
-
 const STANDARD_PRODUCTS = [
   { id: 'prod-consulting', name: 'Corporate Financial Consulting', description: 'Enterprise ERP implementation guidance, custom reporting advisory, and configuration service.', rate: 150 },
   { id: 'prod-audit', name: 'SOX Compliance Audit Preparation', description: 'Comprehensive audit readiness analysis and controls mapping verification.', rate: 2500 },
@@ -61,6 +48,7 @@ const STANDARD_PRODUCTS = [
 
 export default function InvoicesView({ accounts, onPostSuccess, currentUserEmail, onCreateAccount }: InvoicesViewProps) {
   const { supabase, session } = useAuth();
+  const { activeCompany, isPeriodClosed, verifyClosingPassword } = useCompany();
   
   // Tab within invoices: 'create' | 'history'
   const [activeSubTab, setActiveSubTab] = useState<'create' | 'history'>('create');
@@ -98,11 +86,14 @@ export default function InvoicesView({ accounts, onPostSuccess, currentUserEmail
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [isIssuing, setIsIssuing] = useState<boolean>(false);
 
-  // Initialize and load saved invoices upon session change or load
+  // Initialize and load saved invoices upon session change or company change
   useEffect(() => {
     try {
       const userId = session?.user?.id || 'guest';
-      const saved = localStorage.getItem(`conexerp_saved_invoices_${userId}`);
+      const companyKey = activeCompany?.id 
+        ? `finex_company_${activeCompany.id}_invoices` 
+        : `conexerp_saved_invoices_${userId}`;
+      const saved = localStorage.getItem(companyKey);
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
@@ -121,7 +112,7 @@ export default function InvoicesView({ accounts, onPostSuccess, currentUserEmail
     // Auto generate next sequence Invoice Number
     const nextSeq = `INV-${Date.now().toString().slice(-4)}`;
     setInvoiceNumber(nextSeq);
-  }, [session]);
+  }, [session, activeCompany?.id]);
 
   // Pre-requisite accounts auto setup
   useEffect(() => {
@@ -255,6 +246,27 @@ export default function InvoicesView({ accounts, onPostSuccess, currentUserEmail
       }
     }
 
+    // GAAP Accounting Control: Check if invoice date is in a closed period
+    if (activeCompany && isPeriodClosed(invoiceDate)) {
+      if (activeCompany.closingPassword) {
+        const pwd = window.prompt(
+          `ACCOUNTING CONTROL:\nThe books for ${activeCompany.name} are closed through ${activeCompany.closingDate}.\n\nEnter supervisory closing password to issue an invoice with posting date ${invoiceDate}:`
+        );
+        if (!pwd || !verifyClosingPassword(pwd)) {
+          setErrorMsg(`Invoice creation blocked: Date (${invoiceDate}) falls within a closed financial period (locked through ${activeCompany.closingDate}). Authorized password required.`);
+          return;
+        }
+      } else {
+        const proceed = window.confirm(
+          `Notice: Invoice posting date (${invoiceDate}) falls within a closed financial period (locked through ${activeCompany.closingDate}). Do you wish to continue?`
+        );
+        if (!proceed) {
+          setErrorMsg('Invoice issuance cancelled: Period is closed.');
+          return;
+        }
+      }
+    }
+
     setIsIssuing(true);
 
     try {
@@ -360,7 +372,8 @@ export default function InvoicesView({ accounts, onPostSuccess, currentUserEmail
         reversedEntryId: null,
         reversingForId: null,
         createdAt: new Date().toISOString(),
-        createdBy: currentUserEmail || 'client-billing@finexerp.io'
+        createdBy: currentUserEmail || 'client-billing@finexerp.io',
+        companyId: activeCompany?.id
       };
 
       // Execute Parent Posting Callback (propagates updates automatically)
@@ -378,13 +391,17 @@ export default function InvoicesView({ accounts, onPostSuccess, currentUserEmail
         taxAmount: getTaxAmount(),
         grandTotal: getGrandTotal(),
         journalEntryId: generatedJournalEntryId,
-        lines: [...lineItems]
+        lines: [...lineItems],
+        companyId: activeCompany?.id
       };
 
       const updatedHistory = [newInvoice, ...invoiceHistory];
       setInvoiceHistory(updatedHistory);
       const userId = session?.user?.id || 'guest';
-      localStorage.setItem(`conexerp_saved_invoices_${userId}`, JSON.stringify(updatedHistory));
+      const companyKey = activeCompany?.id 
+        ? `finex_company_${activeCompany.id}_invoices` 
+        : `conexerp_saved_invoices_${userId}`;
+      localStorage.setItem(companyKey, JSON.stringify(updatedHistory));
 
       // 5. Reset inputs cleanly & issue feedback
       setSuccessMsg(`Invoice ${invoiceNumber.toUpperCase()} issued successfully! Journal entry ${generatedJournalEntryId} posted behind the scenes.`);

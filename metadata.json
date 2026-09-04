@@ -1,6 +1,6 @@
 {
   "name": "Finex ERP",
-  "description": "A high-fidelity double-entry accounting ledger featuring Supabase authentication, precise cents-based cash management, immutable transaction journal logs, and real-time Balance Sheet reports.",
+  "description": "A high-fidelity double-entry accounting ledger featuring Supabase authentication, multi-company accounting, immutable transaction journal logs, and GAAP-compliant financial statements (Balance Sheet, Income Statement, Statement of Cash Flows, Trial Balance, General Ledger, Stockholders' Equity, and Aging Reports).",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

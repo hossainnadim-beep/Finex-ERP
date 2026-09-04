@@ -7,6 +7,7 @@ import React, { useState, useEffect } from 'react';
 import { Account, JournalEntry, JournalLine, mapDbAccount } from '../types';
 import { Plus, Trash2, CheckCircle2, AlertTriangle, Calculator, FileText, Bookmark, Calendar } from 'lucide-react';
 import { useAuth } from '../AuthContext';
+import { useCompany } from '../CompanyContext';
 
 interface JournalEntryFormProps {
   onPostSuccess: (entry: JournalEntry) => void;
@@ -23,6 +24,7 @@ interface FormRow {
 
 export default function JournalEntryForm({ onPostSuccess, currentUserEmail, accounts }: JournalEntryFormProps) {
   const { supabase, session } = useAuth();
+  const { activeCompany, isPeriodClosed, verifyClosingPassword } = useCompany();
   const [liveAccounts, setLiveAccounts] = useState<Account[]>(accounts || []);
   const [isLoadingAccounts, setIsLoadingAccounts] = useState<boolean>(false);
   const [date, setDate] = useState<string>(new Date().toISOString().split('T')[0]);
@@ -173,6 +175,27 @@ export default function JournalEntryForm({ onPostSuccess, currentUserEmail, acco
       return;
     }
 
+    // GAAP Accounting Control: Verify if Posting Date falls into a closed financial period
+    if (activeCompany && isPeriodClosed(date)) {
+      if (activeCompany.closingPassword) {
+        const passwordPrompt = window.prompt(
+          `ACCOUNTING CONTROL NOTICE:\nThe books for ${activeCompany.name} are closed through ${activeCompany.closingDate}.\n\nEnter supervisory closing password to post this historical transaction:`
+        );
+        if (!passwordPrompt || !verifyClosingPassword(passwordPrompt)) {
+          setErrorMsg(`Action Blocked: Financial period locked through ${activeCompany.closingDate}. Valid supervisory password is required to post or modify entries.`);
+          return;
+        }
+      } else {
+        const proceedWarning = window.confirm(
+          `WARNING: The posting date (${date}) is within a closed financial period (locked through ${activeCompany.closingDate}).\n\nAre you sure you want to proceed with this entry?`
+        );
+        if (!proceedWarning) {
+          setErrorMsg('Posting cancelled: Period is closed.');
+          return;
+        }
+      }
+    }
+
     setIsPosting(true);
 
     let postedEntryId = `JE-${Date.now().toString().slice(-4)}`;
@@ -232,7 +255,8 @@ export default function JournalEntryForm({ onPostSuccess, currentUserEmail, acco
       reversedEntryId: null,
       reversingForId: null,
       createdAt: new Date().toISOString(),
-      createdBy: currentUserEmail
+      createdBy: currentUserEmail,
+      companyId: activeCompany?.id
     };
 
     onPostSuccess(newEntry);

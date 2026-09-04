@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { supabase, isSupabaseConfigured } from '../supabaseClient';
+import { supabase, isSupabaseConfigured, clearStaleSupabaseSession } from '../supabaseClient';
 import { 
   AlertCircle, 
   CheckCircle2, 
@@ -15,7 +15,8 @@ import {
   HelpCircle, 
   ArrowLeft,
   UserCheck,
-  Check
+  Check,
+  Building2
 } from 'lucide-react';
 import { UserSession } from '../types';
 import { useAuth } from '../AuthContext';
@@ -45,14 +46,46 @@ export default function SupabaseAuth({ onLoginSuccess }: SupabaseAuthProps) {
   const [recoveryDomain, setRecoveryDomain] = useState<string>('enterprise.io');
   const [idLookupResult, setIdLookupResult] = useState<string | null>(null);
 
+  // Mandatory Company Details at Registration
+  const [companyName, setCompanyName] = useState<string>('');
+  const [companyLegalName, setCompanyLegalName] = useState<string>('');
+  const [companyIndustry, setCompanyIndustry] = useState<string>('Technology & Software');
+  const [companyCurrency, setCompanyCurrency] = useState<string>('USD');
+  const [fiscalYearMonth, setFiscalYearMonth] = useState<number>(1);
+  const [accountingMethod, setAccountingMethod] = useState<'Accrual' | 'Cash'>('Accrual');
+  const [companyStreet, setCompanyStreet] = useState<string>('');
+  const [companyCity, setCompanyCity] = useState<string>('');
+  const [companyState, setCompanyState] = useState<string>('');
+  const [companyZip, setCompanyZip] = useState<string>('');
+  const [companyCountry, setCompanyCountry] = useState<string>('United States');
+  const [companyTaxId, setCompanyTaxId] = useState<string>('');
+
   const [loading, setLoading] = useState<boolean>(false);
   const [notification, setNotification] = useState<{ 
     type: 'success' | 'error' | 'info'; 
     message: string;
   } | null>(null);
 
-  // Synchronize view if password recovery mode is detected in URL hash
+  // Synchronize view if password recovery mode is detected in URL hash or handle auth error redirects
   useEffect(() => {
+    if (typeof window !== 'undefined' && window.location.hash) {
+      const hash = window.location.hash;
+      if (hash.includes('error=') || hash.includes('error_description=')) {
+        try {
+          const hashParams = new URLSearchParams(hash.substring(1));
+          const errorDesc = hashParams.get('error_description') || hashParams.get('error') || '';
+          const decoded = decodeURIComponent(errorDesc.replace(/\+/g, ' '));
+          clearStaleSupabaseSession();
+          setNotification({
+            type: 'error',
+            message: decoded || 'The authentication or recovery link is invalid or has expired. Please sign in or request a new link.'
+          });
+          window.history.replaceState(null, '', window.location.pathname + window.location.search);
+          return;
+        } catch (_) {}
+      }
+    }
+
     if (isPasswordRecovery) {
       setView('update-password');
       setNotification({
@@ -172,6 +205,14 @@ export default function SupabaseAuth({ onLoginSuccess }: SupabaseAuthProps) {
       return;
     }
 
+    if (!companyName.trim()) {
+      setNotification({
+        type: 'error',
+        message: 'Company Name is required. In FinexERP, all financial data must be associated with a registered company.'
+      });
+      return;
+    }
+
     if (password.length < 6) {
       setNotification({
         type: 'error',
@@ -179,6 +220,55 @@ export default function SupabaseAuth({ onLoginSuccess }: SupabaseAuthProps) {
       });
       return;
     }
+
+    // Save pending company details for automatic provisioning upon session creation
+    const currencySymbolsMap: Record<string, string> = {
+      USD: '$', EUR: '€', GBP: '£', CAD: '$', AUD: '$', JPY: '¥', SGD: '$', INR: '₹', BDT: '৳', AED: 'د.إ', SAR: '﷼'
+    };
+    const pendingCompanyPayload = {
+      name: companyName.trim(),
+      legalName: companyLegalName.trim() || companyName.trim(),
+      taxId: companyTaxId.trim() || '12-3456789',
+      industry: companyIndustry,
+      companyType: 'Corporation',
+      email: emailTrimmed,
+      phone: '+1 (800) 555-0199',
+      website: '',
+      currency: companyCurrency,
+      currencySymbol: currencySymbolsMap[companyCurrency] || '$',
+      address: {
+        street: companyStreet.trim() || '100 Business Parkway, Suite 100',
+        city: companyCity.trim() || 'San Francisco',
+        state: companyState.trim() || 'CA',
+        zip: companyZip.trim() || '94105',
+        country: companyCountry.trim() || 'United States'
+      },
+      legalAddress: {
+        street: companyStreet.trim() || '100 Business Parkway, Suite 100',
+        city: companyCity.trim() || 'San Francisco',
+        state: companyState.trim() || 'CA',
+        zip: companyZip.trim() || '94105',
+        country: companyCountry.trim() || 'United States'
+      },
+      customerFacingAddress: {
+        street: companyStreet.trim() || '100 Business Parkway, Suite 100',
+        city: companyCity.trim() || 'San Francisco',
+        state: companyState.trim() || 'CA',
+        zip: companyZip.trim() || '94105',
+        country: companyCountry.trim() || 'United States'
+      },
+      fiscalYearStartMonth: Number(fiscalYearMonth) || 1,
+      taxYearStartMonth: Number(fiscalYearMonth) || 1,
+      accountingMethod: accountingMethod,
+      closeBooks: false,
+      closingDate: null,
+      closingPassword: '',
+      defaultInvoiceTerms: 'Net 30',
+      defaultSalesMessage: 'Thank you for your business!'
+    };
+    try {
+      localStorage.setItem(`finex_pending_registration_company_${emailTrimmed}`, JSON.stringify(pendingCompanyPayload));
+    } catch (_) {}
 
     if (!isSupabaseConfigured || !supabase) {
       setNotification({
@@ -449,10 +539,19 @@ export default function SupabaseAuth({ onLoginSuccess }: SupabaseAuthProps) {
         });
       }
     } catch (err: any) {
-      setNotification({
-        type: 'error',
-        message: err?.message || 'Invalid or expired reset code. Please request a new reset email.'
-      });
+      const msg = (err?.message || '').toLowerCase();
+      if (msg.includes('invalid refresh token') || msg.includes('refresh token not found') || msg.includes('invalid_grant')) {
+        clearStaleSupabaseSession();
+        setNotification({
+          type: 'error',
+          message: 'The password reset token or link has expired or was already used. Please request a new reset email.'
+        });
+      } else {
+        setNotification({
+          type: 'error',
+          message: err?.message || 'Invalid or expired reset code. Please request a new reset email.'
+        });
+      }
     } finally {
       setLoading(false);
     }
@@ -523,10 +622,19 @@ export default function SupabaseAuth({ onLoginSuccess }: SupabaseAuthProps) {
         }, 1200);
       }
     } catch (err: any) {
-      setNotification({
-        type: 'error',
-        message: err?.message || 'Failed to update password. Your recovery session may have expired. Please request a new link.'
-      });
+      const msg = (err?.message || '').toLowerCase();
+      if (msg.includes('invalid refresh token') || msg.includes('refresh token not found') || msg.includes('invalid_grant')) {
+        clearStaleSupabaseSession();
+        setNotification({
+          type: 'error',
+          message: 'Your recovery session has expired. Please request a fresh password reset link.'
+        });
+      } else {
+        setNotification({
+          type: 'error',
+          message: err?.message || 'Failed to update password. Your recovery session may have expired. Please request a new link.'
+        });
+      }
     } finally {
       setLoading(false);
     }
@@ -805,57 +913,247 @@ export default function SupabaseAuth({ onLoginSuccess }: SupabaseAuthProps) {
             </form>
           )}
 
-          {/* VIEW 2: SIGN UP / REGISTER FORM */}
+          {/* VIEW 2: SIGN UP / REGISTER FORM WITH MANDATORY COMPANY PROFILE */}
           {view === 'signup' && (
             <form onSubmit={handleSignUp} className="space-y-4">
-              <div className="space-y-1.5">
-                <label htmlFor="signup-email" className="block text-xs uppercase tracking-wider text-slate-700 font-bold">
-                  Corporate Email ID
-                </label>
-                <div className="relative rounded">
-                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
-                    <Mail className="h-4 w-4" />
+              <div className="bg-blue-50/60 p-3 rounded border border-blue-200/80 text-xs text-blue-900 flex items-start gap-2">
+                <Building2 className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+                <span>
+                  <strong>Multi-Company Architecture:</strong> All data in FinexERP is strictly tagged with a company. Please provide your business details below to initialize your company ledger.
+                </span>
+              </div>
+
+              {/* User Account Credentials */}
+              <div className="space-y-3">
+                <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider border-b border-slate-200 pb-1">
+                  1. User Account Credentials
+                </h4>
+                
+                <div className="space-y-1.5">
+                  <label htmlFor="signup-email" className="block text-xs uppercase tracking-wider text-slate-700 font-bold">
+                    Corporate Email ID *
+                  </label>
+                  <div className="relative rounded">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                      <Mail className="h-4 w-4" />
+                    </div>
+                    <input
+                      id="signup-email"
+                      name="email"
+                      type="email"
+                      autoComplete="email"
+                      required
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      className="w-full bg-white border border-slate-300 rounded pl-10 pr-4 py-2 text-xs sm:text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 transition-colors font-mono"
+                      placeholder="user@company.com"
+                    />
                   </div>
-                  <input
-                    id="signup-email"
-                    name="email"
-                    type="email"
-                    autoComplete="email"
-                    required
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className="w-full bg-white border border-slate-300 rounded pl-10 pr-4 py-2.5 text-xs sm:text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 transition-colors font-mono"
-                    placeholder="new_user@company.com"
-                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label htmlFor="signup-password" className="uppercase tracking-wider text-slate-700 font-bold text-xs">
+                    Create Password Key *
+                  </label>
+                  <div className="relative rounded">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                      <Lock className="h-4 w-4" />
+                    </div>
+                    <input
+                      id="signup-password"
+                      name="password"
+                      type="password"
+                      autoComplete="new-password"
+                      required
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      className="w-full bg-white border border-slate-300 rounded pl-10 pr-4 py-2 text-xs sm:text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 transition-colors font-mono"
+                      placeholder="••••••••"
+                    />
+                  </div>
+                  <p className="text-[11px] text-slate-500">
+                    Must be at least 6 characters.
+                  </p>
                 </div>
               </div>
 
-              <div className="space-y-1.5">
-                <label htmlFor="signup-password" className="uppercase tracking-wider text-slate-700 font-bold text-xs">
-                  Create Password Key
-                </label>
-                <div className="relative rounded">
-                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
-                    <Lock className="h-4 w-4" />
+              {/* Company Details & Profile (Required) */}
+              <div className="space-y-3 pt-2">
+                <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider border-b border-slate-200 pb-1">
+                  2. Company Details & Financial Setup
+                </h4>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">Company Business Name *</label>
+                    <input
+                      type="text"
+                      required
+                      value={companyName}
+                      onChange={(e) => setCompanyName(e.target.value)}
+                      placeholder="e.g. Apex Global Technologies"
+                      className="w-full bg-white border border-slate-300 rounded px-3 py-2 text-slate-900 focus:outline-none focus:border-blue-600"
+                    />
                   </div>
-                  <input
-                    id="signup-password"
-                    name="password"
-                    type="password"
-                    autoComplete="new-password"
-                    required
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="w-full bg-white border border-slate-300 rounded pl-10 pr-4 py-2.5 text-xs sm:text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 transition-colors font-mono"
-                    placeholder="••••••••"
-                  />
+
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">Legal Registered Name</label>
+                    <input
+                      type="text"
+                      value={companyLegalName}
+                      onChange={(e) => setCompanyLegalName(e.target.value)}
+                      placeholder="e.g. Apex Global Technologies Inc."
+                      className="w-full bg-white border border-slate-300 rounded px-3 py-2 text-slate-900 focus:outline-none focus:border-blue-600"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">Industry Classification</label>
+                    <select
+                      value={companyIndustry}
+                      onChange={(e) => setCompanyIndustry(e.target.value)}
+                      className="w-full bg-white border border-slate-300 rounded px-3 py-2 text-slate-900 focus:outline-none focus:border-blue-600 font-medium"
+                    >
+                      <option value="Technology & Software">Technology & Software / SaaS</option>
+                      <option value="Professional & Financial Services">Professional & Financial Services</option>
+                      <option value="Retail & E-Commerce">Retail & E-Commerce</option>
+                      <option value="Manufacturing & Wholesale">Manufacturing & Wholesale</option>
+                      <option value="Logistics & Transportation">Logistics & Transportation</option>
+                      <option value="Healthcare & Life Sciences">Healthcare & Life Sciences</option>
+                      <option value="Construction & Real Estate">Construction & Real Estate</option>
+                      <option value="Hospitality & Food Services">Hospitality & Food Services</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">Operating Currency</label>
+                    <select
+                      value={companyCurrency}
+                      onChange={(e) => setCompanyCurrency(e.target.value)}
+                      className="w-full bg-white border border-slate-300 rounded px-3 py-2 text-slate-900 focus:outline-none focus:border-blue-600 font-medium"
+                    >
+                      <option value="USD">USD - US Dollar ($)</option>
+                      <option value="EUR">EUR - Euro (€)</option>
+                      <option value="GBP">GBP - British Pound (£)</option>
+                      <option value="CAD">CAD - Canadian Dollar ($)</option>
+                      <option value="AUD">AUD - Australian Dollar ($)</option>
+                      <option value="JPY">JPY - Japanese Yen (¥)</option>
+                      <option value="SGD">SGD - Singapore Dollar ($)</option>
+                      <option value="INR">INR - Indian Rupee (₹)</option>
+                      <option value="BDT">BDT - Bangladeshi Taka (৳)</option>
+                      <option value="AED">AED - UAE Dirham (د.إ)</option>
+                      <option value="SAR">SAR - Saudi Riyal (﷼)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">Financial Year Start</label>
+                    <select
+                      value={fiscalYearMonth}
+                      onChange={(e) => setFiscalYearMonth(Number(e.target.value))}
+                      className="w-full bg-white border border-slate-300 rounded px-3 py-2 text-slate-900 focus:outline-none focus:border-blue-600 font-medium"
+                    >
+                      <option value={1}>January (Standard Calendar Year)</option>
+                      <option value={2}>February</option>
+                      <option value={3}>March</option>
+                      <option value={4}>April (UK / Commonwealth Standard)</option>
+                      <option value={5}>May</option>
+                      <option value={6}>June</option>
+                      <option value={7}>July (US Federal / State Standard)</option>
+                      <option value={8}>August</option>
+                      <option value={9}>September</option>
+                      <option value={10}>October (US Federal Govt)</option>
+                      <option value={11}>November</option>
+                      <option value={12}>December</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">Accounting Method</label>
+                    <div className="flex items-center gap-4 mt-2">
+                      <label className="flex items-center gap-1.5 font-medium cursor-pointer">
+                        <input
+                          type="radio"
+                          name="regAccountingMethod"
+                          value="Accrual"
+                          checked={accountingMethod === 'Accrual'}
+                          onChange={() => setAccountingMethod('Accrual')}
+                          className="text-blue-600"
+                        />
+                        <span>Accrual (GAAP)</span>
+                      </label>
+                      <label className="flex items-center gap-1.5 font-medium cursor-pointer">
+                        <input
+                          type="radio"
+                          name="regAccountingMethod"
+                          value="Cash"
+                          checked={accountingMethod === 'Cash'}
+                          onChange={() => setAccountingMethod('Cash')}
+                          className="text-blue-600"
+                        />
+                        <span>Cash Basis</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  <div className="sm:col-span-2">
+                    <label className="block font-bold text-slate-700 mb-1">Company Street Address</label>
+                    <input
+                      type="text"
+                      value={companyStreet}
+                      onChange={(e) => setCompanyStreet(e.target.value)}
+                      placeholder="100 Enterprise Boulevard, Suite 500"
+                      className="w-full bg-white border border-slate-300 rounded px-3 py-2 text-slate-900 focus:outline-none focus:border-blue-600"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">City</label>
+                    <input
+                      type="text"
+                      value={companyCity}
+                      onChange={(e) => setCompanyCity(e.target.value)}
+                      placeholder="San Francisco"
+                      className="w-full bg-white border border-slate-300 rounded px-3 py-2 text-slate-900 focus:outline-none focus:border-blue-600"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">State / Province</label>
+                    <input
+                      type="text"
+                      value={companyState}
+                      onChange={(e) => setCompanyState(e.target.value)}
+                      placeholder="CA"
+                      className="w-full bg-white border border-slate-300 rounded px-3 py-2 text-slate-900 focus:outline-none focus:border-blue-600"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">ZIP / Postal Code</label>
+                    <input
+                      type="text"
+                      value={companyZip}
+                      onChange={(e) => setCompanyZip(e.target.value)}
+                      placeholder="94105"
+                      className="w-full bg-white border border-slate-300 rounded px-3 py-2 text-slate-900 focus:outline-none focus:border-blue-600"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">Tax ID / EIN</label>
+                    <input
+                      type="text"
+                      value={companyTaxId}
+                      onChange={(e) => setCompanyTaxId(e.target.value)}
+                      placeholder="12-3456789"
+                      className="w-full bg-white border border-slate-300 rounded px-3 py-2 text-slate-900 focus:outline-none focus:border-blue-600"
+                    />
+                  </div>
                 </div>
-                <p className="text-[11px] text-slate-500">
-                  Must be at least 6 characters.
-                </p>
               </div>
 
-              <div className="pt-2">
+              <div className="pt-3">
                 <button
                   id="auth-signup-button"
                   type="submit"
@@ -865,11 +1163,11 @@ export default function SupabaseAuth({ onLoginSuccess }: SupabaseAuthProps) {
                   {loading ? (
                     <div className="flex items-center gap-2">
                       <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin"></div>
-                      <span>Registering Account in Supabase...</span>
+                      <span>Initializing Company & Registering Account...</span>
                     </div>
                   ) : (
                     <>
-                      <span>Register</span>
+                      <span>Register & Create Company</span>
                       <ArrowRight className="h-4 w-4" />
                     </>
                   )}

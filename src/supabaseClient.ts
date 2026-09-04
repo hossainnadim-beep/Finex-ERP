@@ -19,6 +19,87 @@ export const isSupabaseConfigured =
   !supabaseAnonKey.includes('your-supabase-anon-key') &&
   !supabaseAnonKey.includes('your-anon-public-key');
 
+/**
+ * Utility to safely remove stale or corrupted Supabase session keys from local storage
+ * and clear token hashes from the browser history.
+ */
+export function clearStaleSupabaseSession() {
+  if (typeof window === 'undefined') return;
+  try {
+    const keysToRemove: string[] = [];
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const key = window.localStorage.key(i);
+      if (key && (key.startsWith('sb-') || key.includes('supabase.auth'))) {
+        keysToRemove.push(key);
+      }
+    }
+    keysToRemove.forEach((key) => {
+      try {
+        window.localStorage.removeItem(key);
+      } catch (_) {}
+    });
+
+    // Clean up any stale tokens or error descriptions from URL hash
+    if (
+      window.location.hash &&
+      (window.location.hash.includes('access_token') ||
+        window.location.hash.includes('refresh_token') ||
+        window.location.hash.includes('error_description') ||
+        window.location.hash.includes('invalid_grant'))
+    ) {
+      window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    }
+  } catch (e) {
+    console.warn('Unable to clear stale Supabase session:', e);
+  }
+}
+
+// Global safety interceptor for stale/invalid refresh token events
+if (typeof window !== 'undefined') {
+  const isRefreshTokenError = (err: any): boolean => {
+    if (!err) return false;
+    const text = (
+      (err?.message || '') +
+      ' ' +
+      (err?.error_description || '') +
+      ' ' +
+      (typeof err === 'string' ? err : '') +
+      ' ' +
+      (err?.toString ? err.toString() : '')
+    ).toLowerCase();
+
+    return (
+      text.includes('invalid refresh token') ||
+      text.includes('refresh token not found') ||
+      text.includes('refresh_token_not_found') ||
+      text.includes('invalid_grant')
+    );
+  };
+
+  // Intercept unhandled promise rejections from Gotrue background token refresh ticks
+  window.addEventListener('unhandledrejection', (event) => {
+    if (isRefreshTokenError(event.reason)) {
+      event.preventDefault();
+      console.warn('Safely intercepted expired Supabase refresh token:', event.reason?.message || event.reason);
+      clearStaleSupabaseSession();
+      if (supabase) {
+        supabase.auth.signOut({ scope: 'local' }).catch(() => {});
+      }
+    }
+  });
+
+  // Intercept global window runtime errors
+  window.addEventListener('error', (event) => {
+    if (isRefreshTokenError(event.error || event.message)) {
+      event.preventDefault();
+      clearStaleSupabaseSession();
+      if (supabase) {
+        supabase.auth.signOut({ scope: 'local' }).catch(() => {});
+      }
+    }
+  });
+}
+
 // Initialize the Supabase Client safely.
 // If not configured, we export null to prevent blocking the app from rendering.
 export const supabase = isSupabaseConfigured
@@ -49,7 +130,23 @@ export async function testSupabaseConnection(): Promise<{ success: boolean; mess
     );
 
     const checkPromise = supabase.auth.getSession();
-    await Promise.race([checkPromise, timeoutPromise]);
+    const result: any = await Promise.race([checkPromise, timeoutPromise]);
+
+    if (result && result.error) {
+      const errorMsg = result.error.message || '';
+      if (errorMsg.toLowerCase().includes('refresh') || errorMsg.toLowerCase().includes('token') || errorMsg.toLowerCase().includes('grant')) {
+        clearStaleSupabaseSession();
+        await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
+        return {
+          success: true,
+          message: 'Supabase endpoint is reachable (stale session cleared; ready for login).'
+        };
+      }
+      return {
+        success: false,
+        message: result.error.message || 'Error checking session with Supabase.'
+      };
+    }
 
     return {
       success: true,
@@ -57,6 +154,15 @@ export async function testSupabaseConnection(): Promise<{ success: boolean; mess
     };
   } catch (error: any) {
     const errorMsg = error?.message || 'Failed to authenticate with Supabase.';
+    if (errorMsg.toLowerCase().includes('refresh') || errorMsg.toLowerCase().includes('token') || errorMsg.toLowerCase().includes('grant')) {
+      clearStaleSupabaseSession();
+      await supabase?.auth.signOut({ scope: 'local' }).catch(() => {});
+      return {
+        success: true,
+        message: 'Supabase endpoint is reachable (stale session cleared; ready for login).'
+      };
+    }
+
     const isNetwork = errorMsg.toLowerCase().includes('failed to fetch') || 
                       errorMsg.toLowerCase().includes('network') ||
                       errorMsg.toLowerCase().includes('timeout');
