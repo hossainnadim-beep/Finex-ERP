@@ -27,14 +27,46 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+// Helper to detect if current window URL or session has an active password recovery flow
+const checkIsRecoveryActive = (): boolean => {
+  if (typeof window === 'undefined') return false;
+  try {
+    if (sessionStorage.getItem('finex_direct_password_recovery') === 'true') {
+      return true;
+    }
+  } catch (_) {}
+  const hash = window.location.hash || '';
+  const search = window.location.search || '';
+  return (
+    hash.includes('type=recovery') ||
+    search.includes('type=recovery') ||
+    hash.includes('recovery') ||
+    search.includes('recovery') ||
+    (hash.includes('access_token') && !hash.includes('type=signup') && !hash.includes('type=invite'))
+  );
+};
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [session, setSession] = useState<UserSession | null>(null);
   const [user, setUser] = useState<{ id: string; email: string } | null>(null);
   const [supabaseSession, setSupabaseSession] = useState<any>(null);
   const [loading, setLoading] = useState<boolean>(true);
-  const [isPasswordRecovery, setIsPasswordRecovery] = useState<boolean>(false);
+  const [isPasswordRecovery, setIsPasswordRecoveryState] = useState<boolean>(checkIsRecoveryActive);
   const [recoveryEmail, setRecoveryEmail] = useState<string | null>(null);
   const [recoveryError, setRecoveryError] = useState<string | null>(null);
+
+  const setIsPasswordRecovery = (active: boolean) => {
+    setIsPasswordRecoveryState(active);
+    if (typeof window !== 'undefined') {
+      try {
+        if (active) {
+          sessionStorage.setItem('finex_direct_password_recovery', 'true');
+        } else {
+          sessionStorage.removeItem('finex_direct_password_recovery');
+        }
+      } catch (_) {}
+    }
+  };
 
   useEffect(() => {
     let authSubscription: { unsubscribe: () => void } | null = null;
@@ -51,6 +83,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           const errorDesc = errorParams.get('error_description') || errorParams.get('error') || '';
           const decoded = decodeURIComponent(errorDesc.replace(/\+/g, ' '));
           setRecoveryError(decoded || 'This password reset link has expired or has already been used. Please request a new link.');
+          setIsPasswordRecovery(false);
           // Remove error hash from URL cleanly
           window.history.replaceState(null, '', window.location.pathname);
         } catch (_) {}
@@ -60,14 +93,43 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const hasRecoveryIndicator = 
         hash.includes('type=recovery') || 
         search.includes('type=recovery') || 
-        (hash.includes('access_token') && !hash.includes('type=signup'));
+        hash.includes('recovery') ||
+        search.includes('recovery') ||
+        (hash.includes('access_token') && !hash.includes('type=signup') && !hash.includes('type=invite')) ||
+        (typeof window !== 'undefined' && sessionStorage.getItem('finex_direct_password_recovery') === 'true');
 
       if (hasRecoveryIndicator) {
         setIsPasswordRecovery(true);
       }
 
       if (isSupabaseConfigured && supabase) {
-        // 3. Handle PKCE authorization code in search params (?code=...)
+        // 3. Handle direct access_token in hash fragments (#access_token=...&type=recovery)
+        if (hash.includes('access_token=')) {
+          try {
+            const cleanHash = hash.startsWith('#') ? hash.substring(1) : hash;
+            const hashParams = new URLSearchParams(cleanHash);
+            const accessToken = hashParams.get('access_token');
+            const refreshToken = hashParams.get('refresh_token');
+            const type = hashParams.get('type');
+
+            if (accessToken && (type === 'recovery' || hash.includes('recovery') || search.includes('recovery'))) {
+              setIsPasswordRecovery(true);
+              const { data: sessionData, error: sessionErr } = await supabase.auth.setSession({
+                access_token: accessToken,
+                refresh_token: refreshToken || '',
+              });
+              if (!sessionErr && sessionData?.session?.user) {
+                if (sessionData.session.user.email) {
+                  setRecoveryEmail(sessionData.session.user.email);
+                }
+              }
+            }
+          } catch (e: any) {
+            console.warn('Direct hash session parsing notice:', e);
+          }
+        }
+
+        // 4. Handle PKCE authorization code in search params (?code=...)
         if (search.includes('code=')) {
           try {
             const searchParams = new URLSearchParams(search);
@@ -88,7 +150,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           }
         }
 
-        // 4. Handle direct token_hash in search params (?token_hash=...&type=recovery)
+        // 5. Handle direct token_hash in search params (?token_hash=...&type=recovery)
         if (search.includes('token_hash=')) {
           try {
             const searchParams = new URLSearchParams(search);
@@ -113,7 +175,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           }
         }
 
-        // 5. Check existing session
+        // 6. Check existing session
         try {
           const { data, error: sessionError } = await supabase.auth.getSession();
           if (sessionError) {
@@ -172,12 +234,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setSupabaseSession(null);
         }
 
-        // 6. Listen for Auth State changes
+        // 7. Listen for Auth State changes
         const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, currentSession) => {
           if (event === 'PASSWORD_RECOVERY') {
             setIsPasswordRecovery(true);
           }
-          if (typeof window !== 'undefined' && (window.location.hash.includes('type=recovery') || window.location.search.includes('type=recovery'))) {
+          if (
+            typeof window !== 'undefined' &&
+            (window.location.hash.includes('type=recovery') ||
+             window.location.search.includes('type=recovery') ||
+             sessionStorage.getItem('finex_direct_password_recovery') === 'true')
+          ) {
             setIsPasswordRecovery(true);
           }
 

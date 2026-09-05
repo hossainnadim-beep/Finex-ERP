@@ -19,6 +19,23 @@ export const isSupabaseConfigured =
   !supabaseAnonKey.includes('your-supabase-anon-key') &&
   !supabaseAnonKey.includes('your-anon-public-key');
 
+// Early synchronous detection of direct password recovery link clicks
+if (typeof window !== 'undefined') {
+  try {
+    const hash = window.location.hash || '';
+    const search = window.location.search || '';
+    if (
+      hash.includes('type=recovery') ||
+      search.includes('type=recovery') ||
+      hash.includes('recovery') ||
+      search.includes('recovery') ||
+      (hash.includes('access_token') && !hash.includes('type=signup') && !hash.includes('type=invite'))
+    ) {
+      sessionStorage.setItem('finex_direct_password_recovery', 'true');
+    }
+  } catch (_) {}
+}
+
 /**
  * Utility to safely remove stale or corrupted Supabase session keys from local storage
  * and clear token hashes from the browser history.
@@ -26,11 +43,13 @@ export const isSupabaseConfigured =
 export function clearStaleSupabaseSession() {
   if (typeof window === 'undefined') return;
   try {
-    // If there is an active password recovery flow in the URL, DO NOT clear the recovery session
-    if (
-      (window.location.hash && window.location.hash.includes('type=recovery')) ||
-      (window.location.search && window.location.search.includes('type=recovery'))
-    ) {
+    // If there is an active password recovery flow in the URL or storage, DO NOT clear the recovery session
+    const isRecoveryFlow = 
+      sessionStorage.getItem('finex_direct_password_recovery') === 'true' ||
+      (window.location.hash && (window.location.hash.includes('type=recovery') || window.location.hash.includes('recovery'))) ||
+      (window.location.search && (window.location.search.includes('type=recovery') || window.location.search.includes('recovery')));
+
+    if (isRecoveryFlow) {
       return;
     }
 
@@ -50,7 +69,7 @@ export function clearStaleSupabaseSession() {
     // Clean up any stale tokens or error descriptions from URL hash (only when NOT in password recovery)
     if (
       window.location.hash &&
-      !window.location.hash.includes('type=recovery') &&
+      !isRecoveryFlow &&
       (window.location.hash.includes('access_token') ||
         window.location.hash.includes('refresh_token') ||
         window.location.hash.includes('error_description') ||
