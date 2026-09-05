@@ -52,7 +52,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [supabaseSession, setSupabaseSession] = useState<any>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [isPasswordRecovery, setIsPasswordRecoveryState] = useState<boolean>(checkIsRecoveryActive);
-  const [recoveryEmail, setRecoveryEmail] = useState<string | null>(null);
+  const [recoveryEmail, setRecoveryEmail] = useState<string | null>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        return sessionStorage.getItem('finex_recovery_email');
+      } catch (_) {}
+    }
+    return null;
+  });
   const [recoveryError, setRecoveryError] = useState<string | null>(null);
 
   const setIsPasswordRecovery = (active: boolean) => {
@@ -63,6 +70,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           sessionStorage.setItem('finex_direct_password_recovery', 'true');
         } else {
           sessionStorage.removeItem('finex_direct_password_recovery');
+          sessionStorage.removeItem('finex_recovery_access_token');
+          sessionStorage.removeItem('finex_recovery_refresh_token');
+          sessionStorage.removeItem('finex_recovery_email');
         }
       } catch (_) {}
     }
@@ -89,39 +99,133 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         } catch (_) {}
       }
 
-      // 2. Check if current URL contains recovery indicator
+      // 2. Extract recovery parameters from URL if present
+      let rawAccessToken = '';
+      let rawRefreshToken = '';
+      let rawType = '';
+      let rawCode = '';
+      let rawTokenHash = '';
+
+      if (hash.includes('access_token=')) {
+        try {
+          const cleanHash = hash.startsWith('#') ? hash.substring(1) : hash;
+          const hashParams = new URLSearchParams(cleanHash);
+          rawAccessToken = hashParams.get('access_token') || '';
+          rawRefreshToken = hashParams.get('refresh_token') || '';
+          rawType = hashParams.get('type') || '';
+        } catch (_) {}
+      }
+
+      if (search.includes('code=')) {
+        try {
+          const searchParams = new URLSearchParams(search);
+          rawCode = searchParams.get('code') || '';
+        } catch (_) {}
+      }
+
+      if (search.includes('token_hash=')) {
+        try {
+          const searchParams = new URLSearchParams(search);
+          rawTokenHash = searchParams.get('token_hash') || '';
+        } catch (_) {}
+      }
+
+      // 3. Determine if current flow is an active password recovery
       const hasRecoveryIndicator = 
+        rawType === 'recovery' ||
         hash.includes('type=recovery') || 
         search.includes('type=recovery') || 
         hash.includes('recovery') ||
         search.includes('recovery') ||
-        (hash.includes('access_token') && !hash.includes('type=signup') && !hash.includes('type=invite')) ||
+        Boolean(rawAccessToken && !hash.includes('type=signup') && !hash.includes('type=invite')) ||
+        Boolean(rawTokenHash) ||
         (typeof window !== 'undefined' && sessionStorage.getItem('finex_direct_password_recovery') === 'true');
 
       if (hasRecoveryIndicator) {
         setIsPasswordRecovery(true);
+        if (typeof window !== 'undefined') {
+          try {
+            sessionStorage.setItem('finex_direct_password_recovery', 'true');
+            if (rawAccessToken) {
+              sessionStorage.setItem('finex_recovery_access_token', rawAccessToken);
+            }
+            if (rawRefreshToken) {
+              sessionStorage.setItem('finex_recovery_refresh_token', rawRefreshToken);
+            }
+          } catch (_) {}
+        }
       }
 
       if (isSupabaseConfigured && supabase) {
-        // 3. Handle direct access_token in hash fragments (#access_token=...&type=recovery)
-        if (hash.includes('access_token=')) {
-          try {
-            const cleanHash = hash.startsWith('#') ? hash.substring(1) : hash;
-            const hashParams = new URLSearchParams(cleanHash);
-            const accessToken = hashParams.get('access_token');
-            const refreshToken = hashParams.get('refresh_token');
-            const type = hashParams.get('type');
+        // Register Auth State change listener FIRST so no events are missed
+        const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, currentSession) => {
+          const isRecoveryOngoing = 
+            typeof window !== 'undefined' && 
+            (sessionStorage.getItem('finex_direct_password_recovery') === 'true' ||
+             window.location.hash.includes('recovery') ||
+             window.location.search.includes('recovery'));
 
-            if (accessToken && (type === 'recovery' || hash.includes('recovery') || search.includes('recovery'))) {
+          if (event === 'PASSWORD_RECOVERY' || isRecoveryOngoing) {
+            setIsPasswordRecovery(true);
+            if (currentSession?.user?.email) {
+              setRecoveryEmail(currentSession.user.email);
+              try {
+                sessionStorage.setItem('finex_recovery_email', currentSession.user.email);
+              } catch (_) {}
+            }
+          }
+
+          if (currentSession?.user) {
+            const userEmail = currentSession.user.email || 'user@supabase.co';
+            if (isRecoveryOngoing) {
+              setRecoveryEmail(userEmail);
+              try {
+                sessionStorage.setItem('finex_recovery_email', userEmail);
+              } catch (_) {}
+            }
+
+            const userSession: UserSession = {
+              user: {
+                id: currentSession.user.id,
+                email: userEmail
+              },
+              mode: 'supabase',
+              supabaseConfigured: true
+            };
+            setSession(userSession);
+            setUser({
+              id: currentSession.user.id,
+              email: userEmail
+            });
+            setSupabaseSession(currentSession);
+          } else if (event === 'SIGNED_OUT') {
+            if (!isRecoveryOngoing) {
+              setSession(null);
+              setUser(null);
+              setSupabaseSession(null);
+            }
+          }
+        });
+        authSubscription = subscription;
+
+        // 4. Handle direct access_token in hash fragments
+        const tokenToUse = rawAccessToken || (typeof window !== 'undefined' ? sessionStorage.getItem('finex_recovery_access_token') || '' : '');
+        const refreshToUse = rawRefreshToken || (typeof window !== 'undefined' ? sessionStorage.getItem('finex_recovery_refresh_token') || '' : '');
+
+        if (tokenToUse) {
+          try {
+            const { data: sessionData, error: sessionErr } = await supabase.auth.setSession({
+              access_token: tokenToUse,
+              refresh_token: refreshToUse,
+            });
+            if (!sessionErr && sessionData?.session?.user) {
               setIsPasswordRecovery(true);
-              const { data: sessionData, error: sessionErr } = await supabase.auth.setSession({
-                access_token: accessToken,
-                refresh_token: refreshToken || '',
-              });
-              if (!sessionErr && sessionData?.session?.user) {
-                if (sessionData.session.user.email) {
-                  setRecoveryEmail(sessionData.session.user.email);
-                }
+              const uEmail = sessionData.session.user.email || '';
+              if (uEmail) {
+                setRecoveryEmail(uEmail);
+                try {
+                  sessionStorage.setItem('finex_recovery_email', uEmail);
+                } catch (_) {}
               }
             }
           } catch (e: any) {
@@ -129,53 +233,57 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           }
         }
 
-        // 4. Handle PKCE authorization code in search params (?code=...)
-        if (search.includes('code=')) {
+        // 5. Handle PKCE authorization code in search params (?code=...)
+        if (rawCode) {
           try {
-            const searchParams = new URLSearchParams(search);
-            const code = searchParams.get('code');
-            if (code) {
-              const { data: codeData, error: codeErr } = await supabase.auth.exchangeCodeForSession(code);
-              if (!codeErr && codeData?.session) {
-                setIsPasswordRecovery(true);
-                if (codeData.session.user?.email) {
-                  setRecoveryEmail(codeData.session.user.email);
-                }
-              } else if (codeErr) {
-                setRecoveryError(codeErr.message || 'Verification code expired or invalid.');
+            const { data: codeData, error: codeErr } = await supabase.auth.exchangeCodeForSession(rawCode);
+            if (!codeErr && codeData?.session) {
+              setIsPasswordRecovery(true);
+              if (codeData.session.user?.email) {
+                setRecoveryEmail(codeData.session.user.email);
+                try {
+                  sessionStorage.setItem('finex_recovery_email', codeData.session.user.email);
+                } catch (_) {}
               }
+            } else if (codeErr) {
+              setRecoveryError(codeErr.message || 'Verification code expired or invalid.');
             }
           } catch (e: any) {
             console.warn('PKCE exchange error:', e);
           }
         }
 
-        // 5. Handle direct token_hash in search params (?token_hash=...&type=recovery)
-        if (search.includes('token_hash=')) {
+        // 6. Handle direct token_hash in search params (?token_hash=...&type=recovery)
+        if (rawTokenHash) {
           try {
-            const searchParams = new URLSearchParams(search);
-            const tokenHash = searchParams.get('token_hash');
-            const tokenType = (searchParams.get('type') as any) || 'recovery';
-            if (tokenHash) {
-              const { data: hashData, error: hashErr } = await supabase.auth.verifyOtp({
-                token_hash: tokenHash,
-                type: tokenType,
-              });
-              if (!hashErr && hashData?.session) {
-                setIsPasswordRecovery(true);
-                if (hashData.session.user?.email) {
-                  setRecoveryEmail(hashData.session.user.email);
-                }
-              } else if (hashErr) {
-                setRecoveryError(hashErr.message || 'Password reset token has expired or is invalid.');
+            const { data: hashData, error: hashErr } = await supabase.auth.verifyOtp({
+              token_hash: rawTokenHash,
+              type: 'recovery',
+            });
+            if (!hashErr && hashData?.session) {
+              setIsPasswordRecovery(true);
+              if (hashData.session.user?.email) {
+                setRecoveryEmail(hashData.session.user.email);
+                try {
+                  sessionStorage.setItem('finex_recovery_email', hashData.session.user.email);
+                } catch (_) {}
               }
+            } else if (hashErr) {
+              setRecoveryError(hashErr.message || 'Password reset token has expired or is invalid.');
             }
           } catch (e: any) {
             console.warn('token_hash verify error:', e);
           }
         }
 
-        // 6. Check existing session
+        // Clean up URL hash so tokens are safely sequestered in storage
+        if (typeof window !== 'undefined' && window.location.hash.includes('access_token')) {
+          try {
+            window.history.replaceState(null, '', window.location.pathname + (window.location.search || '?type=recovery'));
+          } catch (_) {}
+        }
+
+        // 7. Check existing session
         try {
           const { data, error: sessionError } = await supabase.auth.getSession();
           if (sessionError) {
@@ -197,9 +305,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           } else if (data?.session?.user) {
             const activeSession = data.session;
             const userEmail = activeSession.user.email || 'user@supabase.co';
-            setRecoveryEmail(userEmail);
-
             if (hasRecoveryIndicator) {
+              setRecoveryEmail(userEmail);
+              try {
+                sessionStorage.setItem('finex_recovery_email', userEmail);
+              } catch (_) {}
               setIsPasswordRecovery(true);
             }
 
@@ -218,9 +328,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             });
             setSupabaseSession(activeSession);
           } else {
-            setSession(null);
-            setUser(null);
-            setSupabaseSession(null);
+            // If getSession returned null, but we have recovery tokens saved, restore them
+            const savedAt = typeof window !== 'undefined' ? sessionStorage.getItem('finex_recovery_access_token') : null;
+            const savedRt = typeof window !== 'undefined' ? sessionStorage.getItem('finex_recovery_refresh_token') : null;
+            if (savedAt) {
+              const { data: restored, error: rErr } = await supabase.auth.setSession({
+                access_token: savedAt,
+                refresh_token: savedRt || '',
+              });
+              if (!rErr && restored?.session?.user) {
+                const uEmail = restored.session.user.email || 'user@supabase.co';
+                setRecoveryEmail(uEmail);
+                setIsPasswordRecovery(true);
+                setSession({
+                  user: { id: restored.session.user.id, email: uEmail },
+                  mode: 'supabase',
+                  supabaseConfigured: true
+                });
+                setUser({ id: restored.session.user.id, email: uEmail });
+                setSupabaseSession(restored.session);
+              }
+            } else {
+              setSession(null);
+              setUser(null);
+              setSupabaseSession(null);
+            }
           }
         } catch (error: any) {
           console.warn('Notice during Supabase session initialization:', error);
@@ -233,46 +365,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setUser(null);
           setSupabaseSession(null);
         }
-
-        // 7. Listen for Auth State changes
-        const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, currentSession) => {
-          if (event === 'PASSWORD_RECOVERY') {
-            setIsPasswordRecovery(true);
-          }
-          if (
-            typeof window !== 'undefined' &&
-            (window.location.hash.includes('type=recovery') ||
-             window.location.search.includes('type=recovery') ||
-             sessionStorage.getItem('finex_direct_password_recovery') === 'true')
-          ) {
-            setIsPasswordRecovery(true);
-          }
-
-          if (currentSession?.user) {
-            const userEmail = currentSession.user.email || 'user@supabase.co';
-            setRecoveryEmail(userEmail);
-
-            const userSession: UserSession = {
-              user: {
-                id: currentSession.user.id,
-                email: userEmail
-              },
-              mode: 'supabase',
-              supabaseConfigured: true
-            };
-            setSession(userSession);
-            setUser({
-              id: currentSession.user.id,
-              email: userEmail
-            });
-            setSupabaseSession(currentSession);
-          } else if (event === 'SIGNED_OUT' || !currentSession) {
-            setSession(null);
-            setUser(null);
-            setSupabaseSession(null);
-          }
-        });
-        authSubscription = subscription;
       }
       setLoading(false);
     };

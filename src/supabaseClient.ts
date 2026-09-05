@@ -32,6 +32,14 @@ if (typeof window !== 'undefined') {
       (hash.includes('access_token') && !hash.includes('type=signup') && !hash.includes('type=invite'))
     ) {
       sessionStorage.setItem('finex_direct_password_recovery', 'true');
+      if (hash.includes('access_token=')) {
+        const cleanHash = hash.startsWith('#') ? hash.substring(1) : hash;
+        const params = new URLSearchParams(cleanHash);
+        const at = params.get('access_token');
+        const rt = params.get('refresh_token');
+        if (at) sessionStorage.setItem('finex_recovery_access_token', at);
+        if (rt) sessionStorage.setItem('finex_recovery_refresh_token', rt);
+      }
     }
   } catch (_) {}
 }
@@ -104,14 +112,28 @@ if (typeof window !== 'undefined') {
     );
   };
 
+  const isRecoveryActive = (): boolean => {
+    try {
+      return (
+        sessionStorage.getItem('finex_direct_password_recovery') === 'true' ||
+        window.location.hash.includes('recovery') ||
+        window.location.search.includes('recovery')
+      );
+    } catch (_) {
+      return false;
+    }
+  };
+
   // Intercept unhandled promise rejections from Gotrue background token refresh ticks
   window.addEventListener('unhandledrejection', (event) => {
     if (isRefreshTokenError(event.reason)) {
       event.preventDefault();
       console.warn('Safely intercepted expired Supabase refresh token:', event.reason?.message || event.reason);
-      clearStaleSupabaseSession();
-      if (supabase) {
-        supabase.auth.signOut({ scope: 'local' }).catch(() => {});
+      if (!isRecoveryActive()) {
+        clearStaleSupabaseSession();
+        if (supabase) {
+          supabase.auth.signOut({ scope: 'local' }).catch(() => {});
+        }
       }
     }
   });
@@ -120,22 +142,25 @@ if (typeof window !== 'undefined') {
   window.addEventListener('error', (event) => {
     if (isRefreshTokenError(event.error || event.message)) {
       event.preventDefault();
-      clearStaleSupabaseSession();
-      if (supabase) {
-        supabase.auth.signOut({ scope: 'local' }).catch(() => {});
+      if (!isRecoveryActive()) {
+        clearStaleSupabaseSession();
+        if (supabase) {
+          supabase.auth.signOut({ scope: 'local' }).catch(() => {});
+        }
       }
     }
   });
 }
 
 // Initialize the Supabase Client safely.
-// If not configured, we export null to prevent blocking the app from rendering.
+// detectSessionInUrl is set to false so our React AuthContext manages link-token parsing
+// deterministically without GoTrue wiping window.location.hash or causing race conditions.
 export const supabase = isSupabaseConfigured
   ? createClient(supabaseUrl, supabaseAnonKey, {
       auth: {
         persistSession: true,
         autoRefreshToken: true,
-        detectSessionInUrl: true,
+        detectSessionInUrl: false,
       },
     })
   : null;

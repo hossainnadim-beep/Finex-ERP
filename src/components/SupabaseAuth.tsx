@@ -370,10 +370,11 @@ export default function SupabaseAuth({ onLoginSuccess }: SupabaseAuthProps) {
 
     setLoading(true);
     try {
-      const baseUrl = window.location.origin + window.location.pathname;
-      const redirectUrl = baseUrl.endsWith('/') 
-        ? `${baseUrl}?type=recovery` 
-        : `${baseUrl}/?type=recovery`;
+      let redirectUrl = `${window.location.origin}/?type=recovery`;
+      // If testing or running on localhost, use the whitelisted preview app URL so email links always work
+      if (typeof window !== 'undefined' && (window.location.hostname.includes('localhost') || window.location.hostname === '127.0.0.1')) {
+        redirectUrl = 'https://ais-dev-mme4abigalvzallal2zeqf-373630983644.asia-southeast1.run.app/?type=recovery';
+      }
 
       const { error } = await supabase.auth.resetPasswordForEmail(emailTrimmed, {
         redirectTo: redirectUrl,
@@ -610,9 +611,41 @@ export default function SupabaseAuth({ onLoginSuccess }: SupabaseAuthProps) {
 
     setLoading(true);
     try {
-      const { data, error } = await supabase.auth.updateUser({
+      // 1. Ensure Supabase has a valid recovery session active before calling updateUser
+      const { data: currentSessionData } = await supabase.auth.getSession();
+      if (!currentSessionData?.session) {
+        const savedAt = typeof window !== 'undefined' ? sessionStorage.getItem('finex_recovery_access_token') : null;
+        const savedRt = typeof window !== 'undefined' ? sessionStorage.getItem('finex_recovery_refresh_token') : null;
+        if (savedAt) {
+          await supabase.auth.setSession({
+            access_token: savedAt,
+            refresh_token: savedRt || '',
+          });
+        }
+      }
+
+      let { data, error } = await supabase.auth.updateUser({
         password: newPassword,
       });
+
+      // 2. If updateUser failed due to missing session, attempt recovery token re-hydration and retry
+      if (error && (error.message?.toLowerCase().includes('session') || (error as any).name === 'AuthSessionMissingError')) {
+        const savedAt = typeof window !== 'undefined' ? sessionStorage.getItem('finex_recovery_access_token') : null;
+        const savedRt = typeof window !== 'undefined' ? sessionStorage.getItem('finex_recovery_refresh_token') : null;
+        if (savedAt) {
+          const { error: restoreErr } = await supabase.auth.setSession({
+            access_token: savedAt,
+            refresh_token: savedRt || '',
+          });
+          if (!restoreErr) {
+            const retryRes = await supabase.auth.updateUser({
+              password: newPassword,
+            });
+            data = retryRes.data;
+            error = retryRes.error;
+          }
+        }
+      }
 
       if (error) {
         throw error;
@@ -623,7 +656,14 @@ export default function SupabaseAuth({ onLoginSuccess }: SupabaseAuthProps) {
         message: 'Password successfully updated! Logging into financial ledger...'
       });
 
+      // 3. Clear temporary recovery storage keys cleanly
       if (typeof window !== 'undefined') {
+        try {
+          sessionStorage.removeItem('finex_direct_password_recovery');
+          sessionStorage.removeItem('finex_recovery_access_token');
+          sessionStorage.removeItem('finex_recovery_refresh_token');
+          sessionStorage.removeItem('finex_recovery_email');
+        } catch (_) {}
         window.history.replaceState(null, '', window.location.pathname);
       }
 
