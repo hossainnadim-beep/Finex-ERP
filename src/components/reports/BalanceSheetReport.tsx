@@ -7,6 +7,7 @@ import React, { useMemo } from 'react';
 import { Account, JournalEntry, CompanySettings } from '../../types';
 import ReportHeader from './ReportHeader';
 import { formatGAAPCurrency, computeAccountBalances } from './reportUtils';
+import HierarchicalAccountRows from './HierarchicalAccountRows';
 import { CheckCircle2, AlertTriangle } from 'lucide-react';
 
 interface BalanceSheetReportProps {
@@ -189,32 +190,12 @@ export default function BalanceSheetReport({
               <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wide">
                 Current Assets
               </h4>
-              <div className="divide-y divide-slate-200">
-                {filterZero(financialData.assetList.filter(a => a.isCurrent)).map(({ account, balance }) => (
-                  <div key={account.id} className="flex justify-between items-center py-2 text-xs hover:bg-slate-50 px-1 transition-colors">
-                    <div>
-                      <button
-                        onClick={() => onDrillDown?.(account.id)}
-                        className="text-slate-900 font-medium hover:text-blue-600 hover:underline cursor-pointer text-left"
-                        title={`Click to view transaction breakdown for ${account.name}`}
-                      >
-                        {account.name}
-                      </button>
-                      <span className="text-[10px] text-slate-500 font-mono ml-2">#{account.id}</span>
-                    </div>
-                    <button
-                      onClick={() => onDrillDown?.(account.id)}
-                      className="font-mono text-slate-900 font-semibold hover:text-blue-600 hover:underline cursor-pointer transition-colors"
-                      title={`Click to drill down into transaction report for ${account.name}`}
-                    >
-                      {formatGAAPCurrency(balance, currencySymbol)}
-                    </button>
-                  </div>
-                ))}
-                {filterZero(financialData.assetList.filter(a => a.isCurrent)).length === 0 && (
-                  <p className="text-xs text-slate-500 italic py-2">No current asset accounts</p>
-                )}
-              </div>
+              <HierarchicalAccountRows
+                items={filterZero(financialData.assetList.filter(a => a.isCurrent))}
+                currencySymbol={currencySymbol}
+                onDrillDown={onDrillDown}
+                emptyMessage="No current asset accounts"
+              />
               <div className="flex justify-between items-center pt-2 border-t border-slate-300 text-xs font-semibold text-slate-800">
                 <span>Total Current Assets</span>
                 <button
@@ -233,29 +214,12 @@ export default function BalanceSheetReport({
                 <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wide">
                   Non-Current &amp; Fixed Assets
                 </h4>
-                <div className="divide-y divide-slate-200">
-                  {filterZero(financialData.assetList.filter(a => !a.isCurrent)).map(({ account, balance }) => (
-                    <div key={account.id} className="flex justify-between items-center py-2 text-xs hover:bg-slate-50 px-1 transition-colors">
-                      <div>
-                        <button
-                          onClick={() => onDrillDown?.(account.id)}
-                          className="text-slate-900 font-medium hover:text-blue-600 hover:underline cursor-pointer text-left"
-                          title={`Click to view transaction breakdown for ${account.name}`}
-                        >
-                          {account.name}
-                        </button>
-                        <span className="text-[10px] text-slate-500 font-mono ml-2">#{account.id}</span>
-                      </div>
-                      <button
-                        onClick={() => onDrillDown?.(account.id)}
-                        className="font-mono text-slate-900 font-semibold hover:text-blue-600 hover:underline cursor-pointer transition-colors"
-                        title={`Click to drill down into transaction report for ${account.name}`}
-                      >
-                        {formatGAAPCurrency(balance, currencySymbol)}
-                      </button>
-                    </div>
-                  ))}
-                </div>
+                <HierarchicalAccountRows
+                  items={filterZero(financialData.assetList.filter(a => !a.isCurrent))}
+                  currencySymbol={currencySymbol}
+                  onDrillDown={onDrillDown}
+                  emptyMessage="No non-current asset accounts"
+                />
                 <div className="flex justify-between items-center pt-2 border-t border-slate-300 text-xs font-semibold text-slate-800">
                   <span>Total Non-Current Assets</span>
                   <button
@@ -298,32 +262,12 @@ export default function BalanceSheetReport({
                 <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wide">
                   Current Liabilities
                 </h4>
-                <div className="divide-y divide-slate-200">
-                  {filterZero(financialData.liabilityList.filter(l => l.isCurrent)).map(({ account, balance }) => (
-                    <div key={account.id} className="flex justify-between items-center py-2 text-xs hover:bg-slate-50 px-1 transition-colors">
-                      <div>
-                        <button
-                          onClick={() => onDrillDown?.(account.id)}
-                          className="text-slate-900 font-medium hover:text-blue-600 hover:underline cursor-pointer text-left"
-                          title={`Click to view transaction breakdown for ${account.name}`}
-                        >
-                          {account.name}
-                        </button>
-                        <span className="text-[10px] text-slate-500 font-mono ml-2">#{account.id}</span>
-                      </div>
-                      <button
-                        onClick={() => onDrillDown?.(account.id)}
-                        className="font-mono text-slate-900 font-semibold hover:text-blue-600 hover:underline cursor-pointer transition-colors"
-                        title={`Click to drill down into transaction report for ${account.name}`}
-                      >
-                        {formatGAAPCurrency(balance, currencySymbol)}
-                      </button>
-                    </div>
-                  ))}
-                  {filterZero(financialData.liabilityList.filter(l => l.isCurrent)).length === 0 && (
-                    <p className="text-xs text-slate-500 italic py-2">No current liability accounts</p>
-                  )}
-                </div>
+                <HierarchicalAccountRows
+                  items={filterZero(financialData.liabilityList.filter(l => l.isCurrent))}
+                  currencySymbol={currencySymbol}
+                  onDrillDown={onDrillDown}
+                  emptyMessage="No current liability accounts"
+                />
                 <div className="flex justify-between items-center pt-2 border-t border-slate-300 text-xs font-semibold text-slate-800">
                   <span>Total Current Liabilities</span>
                   <button
@@ -342,29 +286,12 @@ export default function BalanceSheetReport({
                   <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wide">
                     Long-Term Liabilities
                   </h4>
-                  <div className="divide-y divide-slate-200">
-                    {filterZero(financialData.liabilityList.filter(l => !l.isCurrent)).map(({ account, balance }) => (
-                      <div key={account.id} className="flex justify-between items-center py-2 text-xs hover:bg-slate-50 px-1 transition-colors">
-                        <div>
-                          <button
-                            onClick={() => onDrillDown?.(account.id)}
-                            className="text-slate-900 font-medium hover:text-blue-600 hover:underline cursor-pointer text-left"
-                            title={`Click to view transaction breakdown for ${account.name}`}
-                          >
-                            {account.name}
-                          </button>
-                          <span className="text-[10px] text-slate-500 font-mono ml-2">#{account.id}</span>
-                        </div>
-                        <button
-                          onClick={() => onDrillDown?.(account.id)}
-                          className="font-mono text-slate-900 font-semibold hover:text-blue-600 hover:underline cursor-pointer transition-colors"
-                          title={`Click to drill down into transaction report for ${account.name}`}
-                        >
-                          {formatGAAPCurrency(balance, currencySymbol)}
-                        </button>
-                      </div>
-                    ))}
-                  </div>
+                  <HierarchicalAccountRows
+                    items={filterZero(financialData.liabilityList.filter(l => !l.isCurrent))}
+                    currencySymbol={currencySymbol}
+                    onDrillDown={onDrillDown}
+                    emptyMessage="No long-term liability accounts"
+                  />
                 </div>
               )}
 
@@ -388,31 +315,16 @@ export default function BalanceSheetReport({
                 </h3>
               </div>
 
-              <div className="divide-y divide-slate-200">
-                {filterZero(financialData.equityList).map(({ account, balance }) => (
-                  <div key={account.id} className="flex justify-between items-center py-2 text-xs hover:bg-slate-50 px-1 transition-colors">
-                    <div>
-                      <button
-                        onClick={() => onDrillDown?.(account.id)}
-                        className="text-slate-900 font-medium hover:text-blue-600 hover:underline cursor-pointer text-left"
-                        title={`Click to view transaction breakdown for ${account.name}`}
-                      >
-                        {account.name}
-                      </button>
-                      <span className="text-[10px] text-slate-500 font-mono ml-2">#{account.id}</span>
-                    </div>
-                    <button
-                      onClick={() => onDrillDown?.(account.id)}
-                      className="font-mono text-slate-900 font-semibold hover:text-blue-600 hover:underline cursor-pointer transition-colors"
-                      title={`Click to drill down into transaction report for ${account.name}`}
-                    >
-                      {formatGAAPCurrency(balance, currencySymbol)}
-                    </button>
-                  </div>
-                ))}
+              <div className="space-y-2">
+                <HierarchicalAccountRows
+                  items={filterZero(financialData.equityList)}
+                  currencySymbol={currencySymbol}
+                  onDrillDown={onDrillDown}
+                  emptyMessage="No equity accounts"
+                />
 
                 {/* Net Income line item recognized in Equity */}
-                <div className="flex justify-between items-center py-2 text-xs hover:bg-slate-50 px-1 transition-colors">
+                <div className="flex justify-between items-center py-2 text-xs hover:bg-slate-50 px-1 transition-colors border-t border-slate-200">
                   <div>
                     <button
                       onClick={() => onDrillDown?.('4000')}

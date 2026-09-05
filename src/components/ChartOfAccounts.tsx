@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { Account, JournalEntry, AccountClass, NormalBalanceType, mapDbAccount } from '../types';
+import { Account, JournalEntry, AccountClass, NormalBalanceType, mapDbAccount, sortAccountsHierarchically } from '../types';
 import { useAuth } from '../AuthContext';
 import { 
   Database, 
@@ -64,9 +64,11 @@ export default function ChartOfAccounts({
       if (supabase) {
         let query = supabase.from('accounts').select('*');
         if (session?.user?.id) {
-          query = query.eq('user_id', session.user.id);
+          query = query.or(`user_id.is.null,user_id.eq.${session.user.id}`);
+        } else {
+          query = query.is('user_id', null);
         }
-        const { data, error } = await query.order('id', { ascending: true });
+        const { data, error } = await query.order('created_at', { ascending: true });
 
         if (error) {
           setFetchError(error.message);
@@ -104,6 +106,8 @@ export default function ChartOfAccounts({
   const [newClass, setNewClass] = useState<AccountClass>('Asset');
   const [newNormal, setNewNormal] = useState<NormalBalanceType>('Debit');
   const [newDesc, setNewDesc] = useState<string>('');
+  const [newAccountLevel, setNewAccountLevel] = useState<'mother' | 'sub'>('mother');
+  const [newParentId, setNewParentId] = useState<string>('');
   const [formError, setFormError] = useState<string | null>(null);
   const [formSuccess, setFormSuccess] = useState<boolean>(false);
   const [savingAccount, setSavingAccount] = useState<boolean>(false);
@@ -114,6 +118,8 @@ export default function ChartOfAccounts({
   const [editClass, setEditClass] = useState<AccountClass>('Asset');
   const [editNormal, setEditNormal] = useState<NormalBalanceType>('Debit');
   const [editDesc, setEditDesc] = useState<string>('');
+  const [editAccountLevel, setEditAccountLevel] = useState<'mother' | 'sub'>('mother');
+  const [editParentId, setEditParentId] = useState<string>('');
   const [editError, setEditError] = useState<string | null>(null);
   const [updatingAccount, setUpdatingAccount] = useState<boolean>(false);
 
@@ -121,6 +127,27 @@ export default function ChartOfAccounts({
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deletingLoading, setDeletingLoading] = useState<boolean>(false);
+
+  // Check if account being edited has any active sub-accounts
+  const hasSubAccounts = useMemo(() => {
+    if (!editingAccount) return false;
+    return liveAccounts.some(a => a.parentId === editingAccount.id);
+  }, [editingAccount, liveAccounts]);
+
+  // Available mother accounts for creating account (filtered by class, excluding existing sub-accounts)
+  const availableMotherAccounts = useMemo(() => {
+    return liveAccounts.filter(acc => !acc.isSubAccount && acc.class === newClass);
+  }, [liveAccounts, newClass]);
+
+  // Available mother accounts for editing account
+  const availableEditMotherAccounts = useMemo(() => {
+    if (!editingAccount) return [];
+    return liveAccounts.filter(acc => 
+      acc.id !== editingAccount.id && 
+      !acc.isSubAccount && 
+      acc.class === editClass
+    );
+  }, [liveAccounts, editingAccount, editClass]);
 
   // Auto-detect normal balance on class modification to be helpful
   const handleClassChange = (cls: AccountClass) => {
@@ -149,6 +176,11 @@ export default function ChartOfAccounts({
     const codeToCheck = newId.trim();
     if (!codeToCheck || !newName.trim()) {
       setFormError('Account code and account name are mandatory fields.');
+      return;
+    }
+
+    if (newAccountLevel === 'sub' && !newParentId) {
+      setFormError('Please select a mother account for this sub-account.');
       return;
     }
 
@@ -197,7 +229,9 @@ export default function ChartOfAccounts({
         name: newName.trim(),
         class: newClass,
         normalBalance: newNormal,
-        description: newDesc.trim() || `${newName.trim()} description.`
+        description: newDesc.trim() || `${newName.trim()} description.`,
+        isSubAccount: newAccountLevel === 'sub',
+        parentId: newAccountLevel === 'sub' ? newParentId : null
       });
 
       if (added) {
@@ -206,6 +240,8 @@ export default function ChartOfAccounts({
         setNewId('');
         setNewName('');
         setNewDesc('');
+        setNewAccountLevel('mother');
+        setNewParentId('');
         await fetchLiveAccountsFromDb();
         setTimeout(() => {
           setShowAddModal(false);
@@ -229,6 +265,11 @@ export default function ChartOfAccounts({
       return;
     }
 
+    if (editAccountLevel === 'sub' && !editParentId) {
+      setEditError('Please select a mother account for this sub-account.');
+      return;
+    }
+
     setUpdatingAccount(true);
     try {
       if (onUpdateAccount) {
@@ -237,7 +278,9 @@ export default function ChartOfAccounts({
           name: editName.trim(),
           class: editClass,
           normalBalance: editNormal,
-          description: editDesc.trim() || `${editName.trim()} description.`
+          description: editDesc.trim() || `${editName.trim()} description.`,
+          isSubAccount: editAccountLevel === 'sub',
+          parentId: editAccountLevel === 'sub' ? editParentId : null
         });
 
         if (success) {
@@ -313,9 +356,9 @@ export default function ChartOfAccounts({
     return balances;
   }, [entries, liveAccounts]);
 
-  // Handle Search and Classification filters
+  // Handle Search and Classification filters with Hierarchical Ordering
   const filteredAccounts = useMemo(() => {
-    return liveAccounts.filter(acc => {
+    const filtered = liveAccounts.filter(acc => {
       // Classification filter
       if (activeClass !== 'All' && acc.class !== activeClass) {
         return false;
@@ -332,6 +375,8 @@ export default function ChartOfAccounts({
 
       return true;
     });
+
+    return sortAccountsHierarchically(filtered);
   }, [liveAccounts, searchTerm, activeClass]);
 
   const formatCurrency = (cents: number): string => {
@@ -486,22 +531,65 @@ export default function ChartOfAccounts({
                 {filteredAccounts.map(account => {
                   const balObj = accountBalances[account.id] || { debits: 0, credits: 0, final: 0 };
                   const isCurrentAccountBalanced = formatCurrency(balObj.final);
+                  const isSub = Boolean(account.isSubAccount && account.parentId);
+                  const parentAccount = isSub ? liveAccounts.find(a => a.id === account.parentId) : null;
+                  const isMotherWithChildren = !account.isSubAccount && liveAccounts.some(a => a.parentId === account.id);
+
                   return (
-                    <tr key={account.id} className="hover:bg-zinc-905/45 transition-colors group">
+                    <tr
+                      key={account.id}
+                      className={`transition-colors group ${
+                        isSub
+                          ? 'bg-blue-950/15 hover:bg-blue-950/30'
+                          : isMotherWithChildren
+                          ? 'bg-zinc-900/30 hover:bg-zinc-850/40'
+                          : 'hover:bg-zinc-905/45'
+                      }`}
+                    >
                       
                       {/* Code */}
                       <td className="px-5 py-3 font-mono font-bold text-zinc-400 group-hover:text-zinc-200">
-                        #{account.id}
+                        <div className={`flex items-center ${isSub ? 'pl-6' : ''}`}>
+                          {isSub && (
+                            <span className="text-blue-400 font-mono text-sm leading-none mr-2 shrink-0">↳</span>
+                          )}
+                          <span>#{account.id}</span>
+                        </div>
                       </td>
 
                       {/* Name & Description */}
                       <td className="px-5 py-3">
-                        <span className="font-semibold text-zinc-200 block">{account.name}</span>
-                        {account.description && (
-                          <span className="text-[10px] text-zinc-500 block max-w-sm font-sans leading-relaxed truncate mt-0.5" title={account.description}>
-                            {account.description}
-                          </span>
-                        )}
+                        <div className={isSub ? 'pl-6' : ''}>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className={`block ${
+                              isSub
+                                ? 'font-medium text-zinc-300'
+                                : isMotherWithChildren
+                                ? 'font-bold text-white text-xs'
+                                : 'font-semibold text-zinc-200'
+                            }`}>
+                              {account.name}
+                            </span>
+
+                            {isSub && (
+                              <span className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-blue-950/60 text-blue-300 border border-blue-800/40">
+                                Sub-Account of #{account.parentId} {parentAccount ? `(${parentAccount.name})` : ''}
+                              </span>
+                            )}
+
+                            {isMotherWithChildren && (
+                              <span className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-zinc-800 text-zinc-300 border border-zinc-700">
+                                Mother Account
+                              </span>
+                            )}
+                          </div>
+
+                          {account.description && (
+                            <span className="text-[10px] text-zinc-500 block max-w-sm font-sans leading-relaxed truncate mt-0.5" title={account.description}>
+                              {account.description}
+                            </span>
+                          )}
+                        </div>
                       </td>
 
                       {/* Class */}
@@ -549,6 +637,8 @@ export default function ChartOfAccounts({
                               setEditClass(account.class);
                               setEditNormal(account.normalBalance);
                               setEditDesc(account.description || '');
+                              setEditAccountLevel(account.isSubAccount && account.parentId ? 'sub' : 'mother');
+                              setEditParentId(account.parentId || '');
                               setEditError(null);
                             }}
                             className="p-1 text-zinc-500 hover:text-blue-400 hover:bg-zinc-800/80 rounded transition-colors cursor-pointer"
@@ -622,6 +712,90 @@ export default function ChartOfAccounts({
                 {/* Modal Body */}
                 <div className="px-6 py-2 space-y-4 text-xs">
                   
+                  {/* Account Hierarchy Level: Mother Account vs Sub-Account */}
+                  <div className="space-y-2 bg-[#0d0d10] p-3 rounded-lg border border-zinc-800">
+                    <label className="block text-zinc-300 font-semibold">Account Hierarchy Level</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <label
+                        className={`flex items-center gap-2.5 p-2.5 rounded-md border cursor-pointer transition-all ${
+                          newAccountLevel === 'mother'
+                            ? 'bg-blue-950/40 border-blue-600/60 text-blue-200 ring-1 ring-blue-500/40'
+                            : 'bg-[#121214] border-zinc-800 text-zinc-400 hover:text-zinc-200'
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          name="newAccountLevel"
+                          value="mother"
+                          checked={newAccountLevel === 'mother'}
+                          onChange={() => {
+                            setNewAccountLevel('mother');
+                            setNewParentId('');
+                          }}
+                          className="text-blue-600 focus:ring-blue-500"
+                        />
+                        <div>
+                          <span className="font-semibold text-xs block">Mother Account</span>
+                          <span className="text-[10px] text-zinc-500 block">Top-level parent account</span>
+                        </div>
+                      </label>
+
+                      <label
+                        className={`flex items-center gap-2.5 p-2.5 rounded-md border cursor-pointer transition-all ${
+                          newAccountLevel === 'sub'
+                            ? 'bg-blue-950/40 border-blue-600/60 text-blue-200 ring-1 ring-blue-500/40'
+                            : 'bg-[#121214] border-zinc-800 text-zinc-400 hover:text-zinc-200'
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          name="newAccountLevel"
+                          value="sub"
+                          checked={newAccountLevel === 'sub'}
+                          onChange={() => setNewAccountLevel('sub')}
+                          className="text-blue-600 focus:ring-blue-500"
+                        />
+                        <div>
+                          <span className="font-semibold text-xs block">Sub-Account</span>
+                          <span className="text-[10px] text-zinc-500 block">Child of a mother account</span>
+                        </div>
+                      </label>
+                    </div>
+
+                    {/* If Sub-Account is selected: Mother Account Dropdown */}
+                    {newAccountLevel === 'sub' && (
+                      <div className="pt-2 space-y-1.5 border-t border-zinc-800/80 mt-2">
+                        <label className="block text-blue-300 font-semibold flex items-center justify-between">
+                          <span>Select Mother Account</span>
+                          <span className="text-[10px] font-normal text-zinc-400">Related {newClass} accounts</span>
+                        </label>
+                        <select
+                          value={newParentId}
+                          onChange={e => {
+                            const selectedId = e.target.value;
+                            setNewParentId(selectedId);
+                            const parent = liveAccounts.find(a => a.id === selectedId);
+                            if (parent) {
+                              setNewClass(parent.class);
+                              setNewNormal(parent.normalBalance);
+                            }
+                          }}
+                          className="w-full bg-[#09090b] border border-blue-600/50 focus:border-blue-400 focus:outline-none p-2 rounded text-zinc-200 font-sans"
+                        >
+                          <option value="">-- Select Mother Account under which this account will sit --</option>
+                          {availableMotherAccounts.map(mother => (
+                            <option key={mother.id} value={mother.id}>
+                              #{mother.id} - {mother.name} ({mother.class})
+                            </option>
+                          ))}
+                        </select>
+                        <p className="text-[10px] text-zinc-400 leading-normal">
+                          The new account will be displayed immediately under this mother account with sub-indent on the Chart of Accounts, Balance Sheet, Income Statement, and Trial Balance.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
                   {/* Account Code / ID */}
                   <div className="space-y-1.5">
                     <label className="block text-zinc-400 font-semibold">Account Code (numeric)</label>
@@ -656,8 +830,9 @@ export default function ChartOfAccounts({
                       <label className="block text-zinc-400 font-semibold">Account Type</label>
                       <select
                         value={newClass}
+                        disabled={newAccountLevel === 'sub' && Boolean(newParentId)}
                         onChange={e => handleClassChange(e.target.value as AccountClass)}
-                        className="w-full bg-[#09090b] border border-zinc-800 focus:border-zinc-705 focus:outline-none p-2 rounded text-zinc-200"
+                        className="w-full bg-[#09090b] border border-zinc-800 focus:border-zinc-705 focus:outline-none p-2 rounded text-zinc-200 disabled:opacity-60"
                       >
                         <option value="Asset">Asset</option>
                         <option value="Liability">Liability</option>
@@ -672,8 +847,9 @@ export default function ChartOfAccounts({
                       <label className="block text-zinc-400 font-semibold">Normal Balance Type</label>
                       <select
                         value={newNormal}
+                        disabled={newAccountLevel === 'sub' && Boolean(newParentId)}
                         onChange={e => setNewNormal(e.target.value as NormalBalanceType)}
-                        className="w-full bg-[#09090b] border border-zinc-800 focus:border-zinc-705 focus:outline-none p-2 rounded text-zinc-200"
+                        className="w-full bg-[#09090b] border border-zinc-800 focus:border-zinc-705 focus:outline-none p-2 rounded text-zinc-200 disabled:opacity-60"
                       >
                         <option value="Debit">Debit</option>
                         <option value="Credit">Credit</option>
@@ -780,6 +956,99 @@ export default function ChartOfAccounts({
                     />
                   </div>
 
+                  {/* Account Hierarchy Level: Mother vs Sub-Account */}
+                  <div className="space-y-2 bg-[#0d0d10] p-3 rounded-lg border border-zinc-800">
+                    <label className="block text-zinc-300 font-semibold">Account Hierarchy Level</label>
+                    {hasSubAccounts ? (
+                      <div className="p-2.5 bg-amber-950/25 border border-amber-900/40 rounded text-amber-300 text-xs flex items-start gap-2">
+                        <Info className="h-4 w-4 shrink-0 text-amber-400 mt-0.5" />
+                        <div>
+                          <p className="font-semibold text-amber-200">Active Mother Account</p>
+                          <p className="text-[11px] text-zinc-400 mt-0.5">
+                            This account currently has sub-accounts nested under it in the ledger. It must remain a mother account.
+                          </p>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-2 gap-2">
+                        <label
+                          className={`flex items-center gap-2.5 p-2.5 rounded-md border cursor-pointer transition-all ${
+                            editAccountLevel === 'mother'
+                              ? 'bg-blue-950/40 border-blue-600/60 text-blue-200 ring-1 ring-blue-500/40'
+                              : 'bg-[#121214] border-zinc-800 text-zinc-400 hover:text-zinc-200'
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            name="editAccountLevel"
+                            value="mother"
+                            checked={editAccountLevel === 'mother'}
+                            onChange={() => {
+                              setEditAccountLevel('mother');
+                              setEditParentId('');
+                            }}
+                            className="text-blue-600 focus:ring-blue-500"
+                          />
+                          <div>
+                            <span className="font-semibold text-xs block">Mother Account</span>
+                            <span className="text-[10px] text-zinc-500 block">Top-level parent account</span>
+                          </div>
+                        </label>
+
+                        <label
+                          className={`flex items-center gap-2.5 p-2.5 rounded-md border cursor-pointer transition-all ${
+                            editAccountLevel === 'sub'
+                              ? 'bg-blue-950/40 border-blue-600/60 text-blue-200 ring-1 ring-blue-500/40'
+                              : 'bg-[#121214] border-zinc-800 text-zinc-400 hover:text-zinc-200'
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            name="editAccountLevel"
+                            value="sub"
+                            checked={editAccountLevel === 'sub'}
+                            onChange={() => setNewAccountLevel && setEditAccountLevel('sub')}
+                            className="text-blue-600 focus:ring-blue-500"
+                          />
+                          <div>
+                            <span className="font-semibold text-xs block">Sub-Account</span>
+                            <span className="text-[10px] text-zinc-500 block">Child of a mother account</span>
+                          </div>
+                        </label>
+                      </div>
+                    )}
+
+                    {/* If Sub-Account is selected: Mother Account Dropdown */}
+                    {editAccountLevel === 'sub' && !hasSubAccounts && (
+                      <div className="pt-2 space-y-1.5 border-t border-zinc-800/80 mt-2">
+                        <label className="block text-blue-300 font-semibold flex items-center justify-between">
+                          <span>Select Mother Account</span>
+                          <span className="text-[10px] font-normal text-zinc-400">Related {editClass} accounts</span>
+                        </label>
+                        <select
+                          value={editParentId}
+                          onChange={e => {
+                            const selectedId = e.target.value;
+                            setEditParentId(selectedId);
+                            const parent = liveAccounts.find(a => a.id === selectedId);
+                            if (parent) {
+                              setEditClass(parent.class);
+                              setEditNormal(parent.normalBalance);
+                            }
+                          }}
+                          className="w-full bg-[#09090b] border border-blue-600/50 focus:border-blue-400 focus:outline-none p-2 rounded text-zinc-200 font-sans"
+                        >
+                          <option value="">-- Select Mother Account under which this account will sit --</option>
+                          {availableEditMotherAccounts.map(mother => (
+                            <option key={mother.id} value={mother.id}>
+                              #{mother.id} - {mother.name} ({mother.class})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                  </div>
+
                   {/* Account Name */}
                   <div className="space-y-1.5">
                     <label className="block text-zinc-400 font-semibold">Account Name</label>
@@ -799,13 +1068,13 @@ export default function ChartOfAccounts({
                       <label className="block text-zinc-400 font-semibold">Account Type</label>
                       <select
                         value={editClass}
+                        disabled={editAccountLevel === 'sub' && Boolean(editParentId)}
                         onChange={e => handleEditClassChange(e.target.value as AccountClass)}
-                        className="w-full bg-[#09090b] border border-zinc-800 focus:border-zinc-705 focus:outline-none p-2 rounded text-zinc-200"
+                        className="w-full bg-[#09090b] border border-zinc-800 focus:border-zinc-705 focus:outline-none p-2 rounded text-zinc-200 disabled:opacity-60"
                       >
                         <option value="Asset">Asset</option>
                         <option value="Liability">Liability</option>
                         <option value="Equity">Equity</option>
-                        <option value="Revenue">Option</option>
                         <option value="Revenue">Revenue</option>
                         <option value="Expense">Expense</option>
                       </select>
@@ -816,8 +1085,9 @@ export default function ChartOfAccounts({
                       <label className="block text-zinc-400 font-semibold">Normal Balance Type</label>
                       <select
                         value={editNormal}
+                        disabled={editAccountLevel === 'sub' && Boolean(editParentId)}
                         onChange={e => setEditNormal(e.target.value as NormalBalanceType)}
-                        className="w-full bg-[#09090b] border border-zinc-800 focus:border-zinc-705 focus:outline-none p-2 rounded text-zinc-200"
+                        className="w-full bg-[#09090b] border border-zinc-800 focus:border-zinc-705 focus:outline-none p-2 rounded text-zinc-200 disabled:opacity-60"
                       >
                         <option value="Debit">Debit</option>
                         <option value="Credit">Credit</option>

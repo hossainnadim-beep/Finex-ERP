@@ -7,6 +7,7 @@ import React, { useMemo } from 'react';
 import { Account, JournalEntry, CompanySettings } from '../../types';
 import ReportHeader from './ReportHeader';
 import { formatGAAPCurrency } from './reportUtils';
+import HierarchicalAccountRows from './HierarchicalAccountRows';
 
 interface IncomeStatementReportProps {
   company: CompanySettings | null;
@@ -173,32 +174,15 @@ export default function IncomeStatementReport({
               <span className="text-[11px] text-slate-600 font-mono font-medium">Amount</span>
             </div>
 
-            <div className="divide-y divide-slate-200">
-              {filterZero(revenueAccounts, pnlData.revenueMap).map(account => (
-                <div key={account.id} className="flex justify-between items-center py-2 text-xs hover:bg-slate-50 px-1 transition-colors">
-                  <div>
-                    <button
-                      onClick={() => onDrillDown?.(account.id)}
-                      className="text-slate-900 font-medium hover:text-blue-600 hover:underline cursor-pointer text-left"
-                      title={`Click to view transaction breakdown for ${account.name}`}
-                    >
-                      {account.name}
-                    </button>
-                    <span className="text-[10px] text-slate-500 font-mono ml-2">#{account.id}</span>
-                  </div>
-                  <button
-                    onClick={() => onDrillDown?.(account.id)}
-                    className="font-mono text-slate-900 font-semibold hover:text-blue-600 hover:underline cursor-pointer transition-colors"
-                    title={`Click to drill down into transactions for ${account.name}`}
-                  >
-                    {formatGAAPCurrency(pnlData.revenueMap[account.id] || 0, currencySymbol)}
-                  </button>
-                </div>
-              ))}
-              {filterZero(revenueAccounts, pnlData.revenueMap).length === 0 && (
-                <p className="text-xs text-slate-500 italic py-2">No revenue recorded for this period</p>
-              )}
-            </div>
+            <HierarchicalAccountRows
+              items={filterZero(revenueAccounts, pnlData.revenueMap).map(account => ({
+                account,
+                balance: pnlData.revenueMap[account.id] || 0
+              }))}
+              currencySymbol={currencySymbol}
+              onDrillDown={onDrillDown}
+              emptyMessage="No revenue recorded for this period"
+            />
 
             <div className="flex justify-between items-center pt-2 border-t border-slate-300 text-xs font-bold text-slate-900">
               <span>Total Revenue</span>
@@ -221,29 +205,15 @@ export default function IncomeStatementReport({
                 </h4>
               </div>
 
-              <div className="divide-y divide-slate-200">
-                {filterZero(cogsAccounts, pnlData.cogsMap).map(account => (
-                  <div key={account.id} className="flex justify-between items-center py-2 text-xs hover:bg-slate-50 px-1 transition-colors">
-                    <div>
-                      <button
-                        onClick={() => onDrillDown?.(account.id)}
-                        className="text-slate-900 font-medium hover:text-blue-600 hover:underline cursor-pointer text-left"
-                        title={`Click to view transaction breakdown for ${account.name}`}
-                      >
-                        {account.name}
-                      </button>
-                      <span className="text-[10px] text-slate-500 font-mono ml-2">#{account.id}</span>
-                    </div>
-                    <button
-                      onClick={() => onDrillDown?.(account.id)}
-                      className="font-mono text-slate-900 font-semibold hover:text-blue-600 hover:underline cursor-pointer transition-colors"
-                      title={`Click to drill down into transactions for ${account.name}`}
-                    >
-                      {formatGAAPCurrency(pnlData.cogsMap[account.id] || 0, currencySymbol)}
-                    </button>
-                  </div>
-                ))}
-              </div>
+              <HierarchicalAccountRows
+                items={filterZero(cogsAccounts, pnlData.cogsMap).map(account => ({
+                  account,
+                  balance: pnlData.cogsMap[account.id] || 0
+                }))}
+                currencySymbol={currencySymbol}
+                onDrillDown={onDrillDown}
+                emptyMessage="No COGS recorded for this period"
+              />
 
               <div className="flex justify-between items-center pt-2 border-t border-slate-300 text-xs font-semibold text-slate-800">
                 <span>Total Cost of Goods Sold</span>
@@ -281,29 +251,15 @@ export default function IncomeStatementReport({
               </h3>
             </div>
 
-            <div className="divide-y divide-slate-200">
-              {filterZero(operatingExpenseAccounts, pnlData.opexMap).map(account => (
-                <div key={account.id} className="flex justify-between items-center py-2 text-xs hover:bg-slate-50 px-1 transition-colors">
-                  <div>
-                    <button
-                      onClick={() => onDrillDown?.(account.id)}
-                      className="text-slate-900 font-medium hover:text-blue-600 hover:underline cursor-pointer text-left"
-                      title={`Click to view transaction breakdown for ${account.name}`}
-                    >
-                      {account.name}
-                    </button>
-                    <span className="text-[10px] text-slate-500 font-mono ml-2">#{account.id}</span>
-                  </div>
-                  <button
-                    onClick={() => onDrillDown?.(account.id)}
-                    className="font-mono text-slate-900 font-semibold hover:text-blue-600 hover:underline cursor-pointer transition-colors"
-                    title={`Click to drill down into transactions for ${account.name}`}
-                  >
-                    {formatGAAPCurrency(pnlData.opexMap[account.id] || 0, currencySymbol)}
-                  </button>
-                </div>
-              ))}
-            </div>
+            <HierarchicalAccountRows
+              items={filterZero(operatingExpenseAccounts, pnlData.opexMap).map(account => ({
+                account,
+                balance: pnlData.opexMap[account.id] || 0
+              }))}
+              currencySymbol={currencySymbol}
+              onDrillDown={onDrillDown}
+              emptyMessage="No operating expenses recorded for this period"
+            />
 
             <div className="flex justify-between items-center pt-2 border-t border-slate-300 text-xs font-bold text-slate-900">
               <span>Total Operating Expenses</span>
@@ -341,29 +297,15 @@ export default function IncomeStatementReport({
                 </h4>
               </div>
 
-              <div className="divide-y divide-slate-200">
-                {filterZero(otherAccounts, pnlData.otherExpenseMap).map(account => (
-                  <div key={account.id} className="flex justify-between items-center py-2 text-xs hover:bg-slate-50 px-1 transition-colors">
-                    <div>
-                      <button
-                        onClick={() => onDrillDown?.(account.id)}
-                        className="text-slate-900 font-medium hover:text-blue-600 hover:underline cursor-pointer text-left"
-                        title={`Click to view transaction breakdown for ${account.name}`}
-                      >
-                        {account.name}
-                      </button>
-                      <span className="text-[10px] text-slate-500 font-mono ml-2">#{account.id}</span>
-                    </div>
-                    <button
-                      onClick={() => onDrillDown?.(account.id)}
-                      className="font-mono text-slate-900 font-semibold hover:text-blue-600 hover:underline cursor-pointer transition-colors"
-                      title={`Click to drill down into transactions for ${account.name}`}
-                    >
-                      {formatGAAPCurrency(pnlData.otherExpenseMap[account.id] || 0, currencySymbol)}
-                    </button>
-                  </div>
-                ))}
-              </div>
+              <HierarchicalAccountRows
+                items={filterZero(otherAccounts, pnlData.otherExpenseMap).map(account => ({
+                  account,
+                  balance: pnlData.otherExpenseMap[account.id] || 0
+                }))}
+                currencySymbol={currencySymbol}
+                onDrillDown={onDrillDown}
+                emptyMessage="No other expenses recorded for this period"
+              />
 
               <div className="flex justify-between items-center pt-2 border-t border-slate-300 text-xs font-semibold text-slate-800">
                 <span>Total Other Expenses</span>

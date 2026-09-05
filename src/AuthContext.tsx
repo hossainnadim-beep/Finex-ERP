@@ -17,6 +17,10 @@ interface AuthContextType {
   loading: boolean;
   isPasswordRecovery: boolean;
   setIsPasswordRecovery: (isRecovery: boolean) => void;
+  recoveryEmail: string | null;
+  setRecoveryEmail: (email: string | null) => void;
+  recoveryError: string | null;
+  setRecoveryError: (error: string | null) => void;
   logout: () => Promise<void>;
   setSession: React.Dispatch<React.SetStateAction<UserSession | null>>;
 }
@@ -29,27 +33,98 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [supabaseSession, setSupabaseSession] = useState<any>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [isPasswordRecovery, setIsPasswordRecovery] = useState<boolean>(false);
+  const [recoveryEmail, setRecoveryEmail] = useState<string | null>(null);
+  const [recoveryError, setRecoveryError] = useState<string | null>(null);
 
   useEffect(() => {
     let authSubscription: { unsubscribe: () => void } | null = null;
 
-    // Check if current URL contains recovery hash from password reset link
-    if (window.location.hash && (window.location.hash.includes('type=recovery') || window.location.hash.includes('access_token'))) {
-      setIsPasswordRecovery(true);
-    }
-
     const initAuth = async () => {
+      const hash = typeof window !== 'undefined' ? window.location.hash || '' : '';
+      const search = typeof window !== 'undefined' ? window.location.search || '' : '';
+
+      // 1. Detect if the email link redirect returned an error (e.g. token expired, invalid grant)
+      if (hash.includes('error=') || search.includes('error=')) {
+        try {
+          const queryString = hash.includes('error=') ? hash.substring(1) : search.substring(1);
+          const errorParams = new URLSearchParams(queryString);
+          const errorDesc = errorParams.get('error_description') || errorParams.get('error') || '';
+          const decoded = decodeURIComponent(errorDesc.replace(/\+/g, ' '));
+          setRecoveryError(decoded || 'This password reset link has expired or has already been used. Please request a new link.');
+          // Remove error hash from URL cleanly
+          window.history.replaceState(null, '', window.location.pathname);
+        } catch (_) {}
+      }
+
+      // 2. Check if current URL contains recovery indicator
+      const hasRecoveryIndicator = 
+        hash.includes('type=recovery') || 
+        search.includes('type=recovery') || 
+        (hash.includes('access_token') && !hash.includes('type=signup'));
+
+      if (hasRecoveryIndicator) {
+        setIsPasswordRecovery(true);
+      }
+
       if (isSupabaseConfigured && supabase) {
+        // 3. Handle PKCE authorization code in search params (?code=...)
+        if (search.includes('code=')) {
+          try {
+            const searchParams = new URLSearchParams(search);
+            const code = searchParams.get('code');
+            if (code) {
+              const { data: codeData, error: codeErr } = await supabase.auth.exchangeCodeForSession(code);
+              if (!codeErr && codeData?.session) {
+                setIsPasswordRecovery(true);
+                if (codeData.session.user?.email) {
+                  setRecoveryEmail(codeData.session.user.email);
+                }
+              } else if (codeErr) {
+                setRecoveryError(codeErr.message || 'Verification code expired or invalid.');
+              }
+            }
+          } catch (e: any) {
+            console.warn('PKCE exchange error:', e);
+          }
+        }
+
+        // 4. Handle direct token_hash in search params (?token_hash=...&type=recovery)
+        if (search.includes('token_hash=')) {
+          try {
+            const searchParams = new URLSearchParams(search);
+            const tokenHash = searchParams.get('token_hash');
+            const tokenType = (searchParams.get('type') as any) || 'recovery';
+            if (tokenHash) {
+              const { data: hashData, error: hashErr } = await supabase.auth.verifyOtp({
+                token_hash: tokenHash,
+                type: tokenType,
+              });
+              if (!hashErr && hashData?.session) {
+                setIsPasswordRecovery(true);
+                if (hashData.session.user?.email) {
+                  setRecoveryEmail(hashData.session.user.email);
+                }
+              } else if (hashErr) {
+                setRecoveryError(hashErr.message || 'Password reset token has expired or is invalid.');
+              }
+            }
+          } catch (e: any) {
+            console.warn('token_hash verify error:', e);
+          }
+        }
+
+        // 5. Check existing session
         try {
           const { data, error: sessionError } = await supabase.auth.getSession();
           if (sessionError) {
             console.warn('Supabase session verification notice:', sessionError.message);
             const errMsg = sessionError.message || '';
             if (
-              errMsg.toLowerCase().includes('refresh') ||
-              errMsg.toLowerCase().includes('token') ||
-              errMsg.toLowerCase().includes('grant') ||
-              sessionError.status === 400
+              (errMsg.toLowerCase().includes('refresh') ||
+               errMsg.toLowerCase().includes('token') ||
+               errMsg.toLowerCase().includes('grant') ||
+               sessionError.status === 400) &&
+              !hasRecoveryIndicator
             ) {
               clearStaleSupabaseSession();
               await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
@@ -59,10 +134,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }
           } else if (data?.session?.user) {
             const activeSession = data.session;
+            const userEmail = activeSession.user.email || 'user@supabase.co';
+            setRecoveryEmail(userEmail);
+
+            if (hasRecoveryIndicator) {
+              setIsPasswordRecovery(true);
+            }
+
             const userSession: UserSession = {
               user: {
                 id: activeSession.user.id,
-                email: activeSession.user.email || 'user@supabase.co'
+                email: userEmail
               },
               mode: 'supabase',
               supabaseConfigured: true
@@ -70,7 +152,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             setSession(userSession);
             setUser({
               id: activeSession.user.id,
-              email: activeSession.user.email || 'user@supabase.co'
+              email: userEmail
             });
             setSupabaseSession(activeSession);
           } else {
@@ -81,7 +163,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         } catch (error: any) {
           console.warn('Notice during Supabase session initialization:', error);
           const errMsg = error?.message || '';
-          if (errMsg.toLowerCase().includes('refresh') || errMsg.toLowerCase().includes('token')) {
+          if (!hasRecoveryIndicator && (errMsg.toLowerCase().includes('refresh') || errMsg.toLowerCase().includes('token'))) {
             clearStaleSupabaseSession();
             await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
           }
@@ -90,16 +172,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setSupabaseSession(null);
         }
 
+        // 6. Listen for Auth State changes
         const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, currentSession) => {
           if (event === 'PASSWORD_RECOVERY') {
             setIsPasswordRecovery(true);
           }
+          if (typeof window !== 'undefined' && (window.location.hash.includes('type=recovery') || window.location.search.includes('type=recovery'))) {
+            setIsPasswordRecovery(true);
+          }
 
           if (currentSession?.user) {
+            const userEmail = currentSession.user.email || 'user@supabase.co';
+            setRecoveryEmail(userEmail);
+
             const userSession: UserSession = {
               user: {
                 id: currentSession.user.id,
-                email: currentSession.user.email || 'user@supabase.co'
+                email: userEmail
               },
               mode: 'supabase',
               supabaseConfigured: true
@@ -107,7 +196,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             setSession(userSession);
             setUser({
               id: currentSession.user.id,
-              email: currentSession.user.email || 'user@supabase.co'
+              email: userEmail
             });
             setSupabaseSession(currentSession);
           } else if (event === 'SIGNED_OUT' || !currentSession) {
@@ -145,6 +234,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setUser(null);
     setSupabaseSession(null);
     setIsPasswordRecovery(false);
+    setRecoveryEmail(null);
+    setRecoveryError(null);
   };
 
   return (
@@ -157,6 +248,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       loading,
       isPasswordRecovery,
       setIsPasswordRecovery,
+      recoveryEmail,
+      setRecoveryEmail,
+      recoveryError,
+      setRecoveryError,
       logout,
       setSession
     }}>
@@ -178,7 +273,7 @@ interface ProtectedRouteProps {
 }
 
 export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
-  const { session, loading, setSession } = useAuth();
+  const { session, loading, isPasswordRecovery, setSession } = useAuth();
 
   if (loading) {
     return (
@@ -191,7 +286,9 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
     );
   }
 
-  if (!session) {
+  // CRITICAL: When a user clicks a password reset link in their email (isPasswordRecovery is true),
+  // they MUST see the Set New Password interface, NOT the protected app ledger!
+  if (isPasswordRecovery || !session) {
     return (
       <SupabaseAuth 
         onLoginSuccess={(userSession) => {

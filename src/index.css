@@ -345,7 +345,35 @@ footer.bg-\[\#121214\] {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08) !important;
 }
 
-/* 8. Premium GAAP-Compliant Printing Layout Media Queries */
+/* 8. Guaranteed Crystal-Clear Transaction Amounts & Full Page View Visibility */
+#edit-journal-full-page input[type="number"],
+.amount-number-input {
+  color: #0f172a !important;
+  background-color: #ffffff !important;
+  font-family: var(--font-mono), monospace !important;
+  font-weight: 700 !important;
+  font-size: 1.125rem !important; /* 18px */
+  letter-spacing: -0.01em !important;
+  opacity: 1 !important;
+}
+
+#edit-journal-full-page input[type="number"]::placeholder {
+  color: #94a3b8 !important;
+}
+
+#edit-journal-full-page input[type="text"],
+#edit-journal-full-page input[type="date"],
+#edit-journal-full-page select {
+  color: #0f172a !important;
+  background-color: #ffffff !important;
+  opacity: 1 !important;
+}
+
+#edit-journal-full-page {
+  background-color: #f8fafc;
+}
+
+/* 9. Premium GAAP-Compliant Printing Layout Media Queries */
 @media print {
   /* Absolute silencing of all web workspace chrome and connectivity panels */
   aside,

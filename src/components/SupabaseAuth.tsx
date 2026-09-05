@@ -16,7 +16,10 @@ import {
   ArrowLeft,
   UserCheck,
   Check,
-  Building2
+  Building2,
+  Eye,
+  EyeOff,
+  ShieldCheck
 } from 'lucide-react';
 import { UserSession } from '../types';
 import { useAuth } from '../AuthContext';
@@ -29,13 +32,22 @@ interface SupabaseAuthProps {
 type AuthView = 'signin' | 'signup' | 'forgot-password' | 'forgot-id' | 'update-password' | 'verify-code';
 
 export default function SupabaseAuth({ onLoginSuccess }: SupabaseAuthProps) {
-  const { isPasswordRecovery, setIsPasswordRecovery } = useAuth();
+  const { 
+    isPasswordRecovery, 
+    setIsPasswordRecovery, 
+    recoveryEmail, 
+    recoveryError, 
+    setRecoveryError, 
+    user 
+  } = useAuth();
 
   const [view, setView] = useState<AuthView>(isPasswordRecovery ? 'update-password' : 'signin');
-  const [email, setEmail] = useState<string>('');
+  const [email, setEmail] = useState<string>(recoveryEmail || '');
   const [password, setPassword] = useState<string>('');
   const [confirmPassword, setConfirmPassword] = useState<string>('');
   const [newPassword, setNewPassword] = useState<string>('');
+  const [showNewPassword, setShowNewPassword] = useState<boolean>(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState<boolean>(false);
   
   // Verification code / token / link paste
   const [otpToken, setOtpToken] = useState<string>('');
@@ -66,31 +78,32 @@ export default function SupabaseAuth({ onLoginSuccess }: SupabaseAuthProps) {
     message: string;
   } | null>(null);
 
-  // Synchronize view if password recovery mode is detected in URL hash or handle auth error redirects
+  // Sync recovery email if loaded asynchronously
   useEffect(() => {
-    if (typeof window !== 'undefined' && window.location.hash) {
-      const hash = window.location.hash;
-      if (hash.includes('error=') || hash.includes('error_description=')) {
-        try {
-          const hashParams = new URLSearchParams(hash.substring(1));
-          const errorDesc = hashParams.get('error_description') || hashParams.get('error') || '';
-          const decoded = decodeURIComponent(errorDesc.replace(/\+/g, ' '));
-          clearStaleSupabaseSession();
-          setNotification({
-            type: 'error',
-            message: decoded || 'The authentication or recovery link is invalid or has expired. Please sign in or request a new link.'
-          });
-          window.history.replaceState(null, '', window.location.pathname + window.location.search);
-          return;
-        } catch (_) {}
-      }
+    if (recoveryEmail && !email) {
+      setEmail(recoveryEmail);
     }
+  }, [recoveryEmail]);
 
+  // Handle errors passed from email redirect (e.g., token expired or invalid)
+  useEffect(() => {
+    if (recoveryError) {
+      setView('forgot-password');
+      setNotification({
+        type: 'error',
+        message: recoveryError
+      });
+      setRecoveryError(null);
+    }
+  }, [recoveryError, setRecoveryError]);
+
+  // Synchronize view if password recovery mode is detected
+  useEffect(() => {
     if (isPasswordRecovery) {
       setView('update-password');
       setNotification({
         type: 'info',
-        message: 'Password recovery session detected. Please enter your new password below.'
+        message: 'Email reset link verified! Please enter your new password below to update your account.'
       });
     }
   }, [isPasswordRecovery]);
@@ -355,7 +368,7 @@ export default function SupabaseAuth({ onLoginSuccess }: SupabaseAuthProps) {
 
     setLoading(true);
     try {
-      const redirectUrl = window.location.origin;
+      const redirectUrl = window.location.origin + window.location.pathname;
       const { error } = await supabase.auth.resetPasswordForEmail(emailTrimmed, {
         redirectTo: redirectUrl,
       });
@@ -366,7 +379,7 @@ export default function SupabaseAuth({ onLoginSuccess }: SupabaseAuthProps) {
 
       setNotification({
         type: 'success',
-        message: `Password reset email dispatched to ${emailTrimmed}. If clicking the email link opens a "Page not found" error, you can copy the link/code and use the "Enter Code / Paste Link" tab below!`
+        message: `Password reset email dispatched to ${emailTrimmed}! Please check your email inbox and click the reset link directly to set your new password.`
       });
     } catch (err: any) {
       setNotification({
@@ -603,6 +616,10 @@ export default function SupabaseAuth({ onLoginSuccess }: SupabaseAuthProps) {
         message: 'Password successfully updated! Logging into financial ledger...'
       });
 
+      if (typeof window !== 'undefined') {
+        window.history.replaceState(null, '', window.location.pathname);
+      }
+
       setIsPasswordRecovery(false);
 
       if (data?.user) {
@@ -610,7 +627,7 @@ export default function SupabaseAuth({ onLoginSuccess }: SupabaseAuthProps) {
           onLoginSuccess({
             user: {
               id: data.user.id,
-              email: data.user.email || email || 'user@enterprise.io'
+              email: data.user.email || recoveryEmail || email || 'user@enterprise.io'
             },
             mode: 'supabase',
             supabaseConfigured: true
@@ -1208,7 +1225,7 @@ export default function SupabaseAuth({ onLoginSuccess }: SupabaseAuthProps) {
                     />
                   </div>
                   <p className="text-[11px] text-slate-500">
-                    A secure password recovery link will be sent to your registered address.
+                    A secure password recovery link will be sent directly to this address.
                   </p>
                 </div>
 
@@ -1230,34 +1247,32 @@ export default function SupabaseAuth({ onLoginSuccess }: SupabaseAuthProps) {
                       </>
                     )}
                   </button>
-
-                  <button
-                    type="button"
-                    onClick={() => switchView('verify-code')}
-                    className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 font-medium py-2 rounded text-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
-                  >
-                    <span>Already have the reset link or code? Click here</span>
-                  </button>
                 </div>
               </form>
 
-              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-600 space-y-2">
-                <div className="font-semibold text-slate-800 flex items-center gap-1.5">
-                  <HelpCircle className="h-3.5 w-3.5 text-blue-600" />
-                  <span>Why does the email link show "Page not found"?</span>
+              <div className="p-3.5 bg-blue-50/60 border border-blue-200/80 rounded-lg text-xs text-blue-900 space-y-2">
+                <div className="font-semibold text-blue-950 flex items-center gap-1.5">
+                  <ShieldCheck className="h-4 w-4 text-blue-600" />
+                  <span>How Direct Email Reset Works</span>
                 </div>
-                <p className="text-[11px] leading-relaxed text-slate-600">
-                  By default, Supabase email links point to <code className="bg-slate-200 px-1 rounded">localhost:3000</code>. To fix this:
+                <p className="text-[11px] leading-relaxed text-blue-800">
+                  After clicking "Send Password Reset Link", open the email received in your inbox (or Spam/Junk folder) and simply click the <strong>Reset Password</strong> link. The application will open directly to the <strong>Set New Password</strong> form.
                 </p>
-                <ol className="text-[11px] list-decimal list-inside space-y-1 text-slate-700 font-sans">
-                  <li>In your email, right-click the reset button $\rightarrow$ <strong>Copy Link Address</strong></li>
-                  <li>Click <strong>"Already have the reset link or code"</strong> above and paste it directly!</li>
-                </ol>
+              </div>
+
+              <div className="pt-1 text-center">
+                <button
+                  type="button"
+                  onClick={() => switchView('verify-code')}
+                  className="text-[11px] text-slate-500 hover:text-blue-700 underline cursor-pointer"
+                >
+                  Need to manually enter a 6-digit code or paste a link? Click here
+                </button>
               </div>
             </div>
           )}
 
-          {/* VIEW 4: DIRECT CODE / LINK PASTE VERIFICATION (Fixes Page Not Found) */}
+          {/* VIEW 4: DIRECT CODE / LINK PASTE VERIFICATION (FALLBACK) */}
           {view === 'verify-code' && (
             <div className="space-y-4">
               <button
@@ -1431,10 +1446,25 @@ export default function SupabaseAuth({ onLoginSuccess }: SupabaseAuthProps) {
           {/* VIEW 6: SET NEW PASSWORD FORM (RECOVERY COMPLETION) */}
           {view === 'update-password' && (
             <div className="space-y-4">
+              <div className="bg-emerald-50 border border-emerald-200/80 rounded-lg p-3 text-xs flex items-center justify-between shadow-xs">
+                <div className="flex items-center gap-2.5">
+                  <ShieldCheck className="h-5 w-5 text-emerald-600 shrink-0" />
+                  <div>
+                    <span className="font-semibold text-emerald-950 block">Verified via Password Recovery Link</span>
+                    <span className="text-[11px] text-emerald-700 font-mono">
+                      {recoveryEmail || user?.email || email || 'Account Credentials'}
+                    </span>
+                  </div>
+                </div>
+                <span className="text-[10px] font-bold uppercase tracking-wider bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded">
+                  Active
+                </span>
+              </div>
+
               <form onSubmit={handleUpdatePassword} className="space-y-4">
                 <div className="space-y-1.5">
                   <label htmlFor="new-password" className="block text-xs uppercase tracking-wider text-slate-700 font-bold">
-                    New Password Key
+                    New Password Key (Min. 6 Characters)
                   </label>
                   <div className="relative rounded">
                     <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
@@ -1442,13 +1472,22 @@ export default function SupabaseAuth({ onLoginSuccess }: SupabaseAuthProps) {
                     </div>
                     <input
                       id="new-password"
-                      type="password"
+                      type={showNewPassword ? 'text' : 'password'}
                       required
+                      minLength={6}
                       value={newPassword}
                       onChange={(e) => setNewPassword(e.target.value)}
-                      className="w-full bg-white border border-slate-300 rounded pl-10 pr-4 py-2.5 text-xs sm:text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 transition-colors font-mono"
-                      placeholder="New password (min 6 chars)"
+                      className="w-full bg-white border border-slate-300 rounded pl-10 pr-10 py-2.5 text-xs sm:text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 transition-colors font-mono"
+                      placeholder="Enter new password (min 6 chars)"
                     />
+                    <button
+                      type="button"
+                      onClick={() => setShowNewPassword(!showNewPassword)}
+                      className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer"
+                      title={showNewPassword ? "Hide password" : "Show password"}
+                    >
+                      {showNewPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
                   </div>
                 </div>
 
@@ -1462,31 +1501,53 @@ export default function SupabaseAuth({ onLoginSuccess }: SupabaseAuthProps) {
                     </div>
                     <input
                       id="confirm-password"
-                      type="password"
+                      type={showConfirmPassword ? 'text' : 'password'}
                       required
+                      minLength={6}
                       value={confirmPassword}
                       onChange={(e) => setConfirmPassword(e.target.value)}
-                      className="w-full bg-white border border-slate-300 rounded pl-10 pr-4 py-2.5 text-xs sm:text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 transition-colors font-mono"
-                      placeholder="Repeat new password"
+                      className="w-full bg-white border border-slate-300 rounded pl-10 pr-10 py-2.5 text-xs sm:text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 transition-colors font-mono"
+                      placeholder="Confirm new password"
                     />
+                    <button
+                      type="button"
+                      onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                      className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer"
+                      title={showConfirmPassword ? "Hide password" : "Show password"}
+                    >
+                      {showConfirmPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
                   </div>
+                  {confirmPassword && (
+                    <div className="text-[11px] pt-0.5">
+                      {newPassword === confirmPassword ? (
+                        <span className="text-emerald-600 font-semibold flex items-center gap-1">
+                          <Check className="h-3 w-3" /> Passwords match
+                        </span>
+                      ) : (
+                        <span className="text-amber-600 font-semibold flex items-center gap-1">
+                          <AlertCircle className="h-3 w-3" /> Passwords do not match
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 <div className="pt-2">
                   <button
                     type="submit"
-                    disabled={loading}
+                    disabled={loading || (confirmPassword.length > 0 && newPassword !== confirmPassword)}
                     className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded transition-all text-sm shadow-md active:scale-98 flex items-center justify-center gap-2 disabled:opacity-50 disabled:pointer-events-none cursor-pointer"
                   >
                     {loading ? (
                       <div className="flex items-center gap-2">
                         <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin"></div>
-                        <span>Updating Password Key...</span>
+                        <span>Saving New Password Key...</span>
                       </div>
                     ) : (
                       <>
                         <Check className="h-4 w-4" />
-                        <span>Save New Password &amp; Enter Console</span>
+                        <span>Save New Password &amp; Sign In</span>
                       </>
                     )}
                   </button>
@@ -1499,7 +1560,7 @@ export default function SupabaseAuth({ onLoginSuccess }: SupabaseAuthProps) {
                   setIsPasswordRecovery(false);
                   switchView('signin');
                 }}
-                className="w-full text-center text-xs text-slate-500 hover:text-slate-800 font-medium py-1"
+                className="w-full text-center text-xs text-slate-500 hover:text-slate-800 font-medium py-1 cursor-pointer"
               >
                 Cancel and return to Sign In
               </button>

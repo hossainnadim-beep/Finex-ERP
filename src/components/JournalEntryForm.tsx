@@ -8,6 +8,7 @@ import { Account, JournalEntry, JournalLine, mapDbAccount } from '../types';
 import { Plus, Trash2, CheckCircle2, AlertTriangle, Calculator, FileText, Bookmark, Calendar } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { useCompany } from '../CompanyContext';
+import { resolveJournalLinesForSupabase } from '../utils/supabaseLedger';
 
 interface JournalEntryFormProps {
   onPostSuccess: (entry: JournalEntry) => void;
@@ -203,14 +204,7 @@ export default function JournalEntryForm({ onPostSuccess, currentUserEmail, acco
     // If Supabase is active, execute the RPC function
     if (supabase) {
       try {
-        const p_lines = parsedLines.map(line => {
-          const matchedAcct = liveAccounts.find(a => a.id === line.accountId);
-          return {
-            account_id: matchedAcct?.dbId || matchedAcct?.id || line.accountId,
-            debit_amount: line.debit,
-            credit_amount: line.credit
-          };
-        });
+        const p_lines = await resolveJournalLinesForSupabase(supabase, session, parsedLines, liveAccounts);
 
         console.log('Executing Supabase RPC create_balanced_journal_entry:', {
           p_date: date,
@@ -279,6 +273,8 @@ export default function JournalEntryForm({ onPostSuccess, currentUserEmail, acco
   };
 
   const differenceCents = Math.abs(totalDebitsCents - totalCreditsCents);
+  const hasAnyAmount = totalDebitsCents > 0 || totalCreditsCents > 0;
+  const hasImbalance = hasAnyAmount && totalDebitsCents !== totalCreditsCents;
   const isBalanced = totalDebitsCents === totalCreditsCents && totalDebitsCents > 0;
 
   return (
@@ -496,21 +492,25 @@ export default function JournalEntryForm({ onPostSuccess, currentUserEmail, acco
                 <CheckCircle2 className="h-3.5 w-3.5 text-blue-450" />
                 <span>Balanced Voucher</span>
               </div>
-            ) : (
-              <div className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-950/20 text-amber-405 border border-amber-855/30 rounded text-xs font-semibold">
+            ) : hasImbalance ? (
+              <div className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-950/20 text-amber-400 border border-amber-800/30 rounded text-xs font-semibold">
                 <AlertTriangle className="h-3.5 w-3.5 text-amber-400" />
                 <span>Asymmetric Entries</span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-900/40 text-zinc-500 border border-zinc-800 rounded text-xs">
+                <span>Enter Line Amounts</span>
               </div>
             )}
           </div>
         </div>
 
-        {/* Unbalanced Warning Banner */}
-        {!isBalanced && (
+        {/* Unbalanced Warning Banner - Only shown when amounts are entered and unbalanced */}
+        {hasImbalance && (
           <div className="p-3 bg-amber-950/15 border border-amber-900/30 text-amber-400 rounded text-xs flex items-center gap-2" id="imbalance-warning">
             <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400 animate-pulse" />
             <span>
-              <strong>Validation Alert:</strong> The 'Post Journal Entry' button remains deactivated because your entries are unbalanced. Total Debits ({formatCurrency(totalDebitsCents)}) must exactly equal Total Credits ({formatCurrency(totalCreditsCents)}) and be greater than zero.
+              <strong>Validation Alert:</strong> Your entries are unbalanced. Total Debits ({formatCurrency(totalDebitsCents)}) must equal Total Credits ({formatCurrency(totalCreditsCents)}). Difference: {formatCurrency(differenceCents)}.
             </span>
           </div>
         )}

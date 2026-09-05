@@ -119,6 +119,8 @@ export interface Account {
   normalBalance: NormalBalanceType;
   description: string;
   dbId?: string; // Database UUID if fetched from Supabase accounts table
+  parentId?: string | null; // Account code/ID of mother (parent) account
+  isSubAccount?: boolean; // True if this is a sub-account of a mother account
 }
 
 export interface JournalLine {
@@ -167,7 +169,7 @@ export interface AuditLog {
   id: string;
   companyId?: string; // Scoped to company
   timestamp: string;
-  action: 'CREATE' | 'REVERSE' | 'SOFT_DELETE' | 'AUTH_SIGN_IN' | 'AUTH_SIGN_UP' | 'AUTH_SIGN_OUT' | 'COMPANY_UPDATE' | 'USER_INVITE' | 'RECONCILE' | 'SETTINGS_UPDATE';
+  action: 'CREATE' | 'UPDATE' | 'DELETE' | 'REVERSE' | 'SOFT_DELETE' | 'AUTH_SIGN_IN' | 'AUTH_SIGN_UP' | 'AUTH_SIGN_OUT' | 'COMPANY_UPDATE' | 'USER_INVITE' | 'RECONCILE' | 'SETTINGS_UPDATE';
   actor: string;
   details: string;
   targetId?: string;
@@ -276,12 +278,81 @@ export function mapDbAccount(row: any): Account {
     }
   }
 
+  // 6. Determine Parent Account / Sub-Account status
+  const parentKeys = ['parentId', 'parent_id', 'parent_account_id', 'parent_code', 'mother_account_id', 'mother_id'];
+  let parentId: string | null = null;
+  for (const key of parentKeys) {
+    if (row[key] !== undefined && row[key] !== null && String(row[key]).trim() !== '') {
+      parentId = String(row[key]).trim();
+      break;
+    }
+  }
+
+  const isSubAccount = Boolean(
+    row.isSubAccount ||
+    row.is_sub_account ||
+    row.is_subaccount ||
+    (parentId !== null && parentId !== '')
+  );
+
   return {
     id: finalId,
     name,
     class: finalClass,
     normalBalance: finalBalance,
     description: description || `${name} account description.`,
-    dbId: row.id
+    dbId: row.id,
+    parentId: parentId || null,
+    isSubAccount
   };
+}
+
+/**
+ * Sorts an array of accounts hierarchically:
+ * Each top-level mother account is immediately followed by its child sub-accounts.
+ */
+export function sortAccountsHierarchically(accounts: Account[]): Account[] {
+  // Map of parentId -> array of child accounts
+  const childrenMap = new Map<string, Account[]>();
+  const topLevelAccounts: Account[] = [];
+
+  // Group accounts
+  accounts.forEach(acc => {
+    if (acc.isSubAccount && acc.parentId) {
+      const list = childrenMap.get(acc.parentId) || [];
+      list.push(acc);
+      childrenMap.set(acc.parentId, list);
+    } else {
+      topLevelAccounts.push(acc);
+    }
+  });
+
+  // Sort top-level by numeric ID / code
+  topLevelAccounts.sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
+
+  const result: Account[] = [];
+  const processedIds = new Set<string>();
+
+  topLevelAccounts.forEach(parent => {
+    result.push(parent);
+    processedIds.add(parent.id);
+
+    // Append direct sub-accounts immediately under this mother account
+    const children = childrenMap.get(parent.id) || [];
+    children.sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
+    children.forEach(child => {
+      result.push(child);
+      processedIds.add(child.id);
+    });
+  });
+
+  // Handle any orphaned sub-accounts whose parents aren't in this list
+  accounts.forEach(acc => {
+    if (!processedIds.has(acc.id)) {
+      result.push(acc);
+      processedIds.add(acc.id);
+    }
+  });
+
+  return result;
 }

@@ -4,7 +4,7 @@
  */
 
 import React, { useMemo } from 'react';
-import { Account, JournalEntry, CompanySettings } from '../../types';
+import { Account, JournalEntry, CompanySettings, sortAccountsHierarchically } from '../../types';
 import ReportHeader from './ReportHeader';
 import { formatGAAPCurrency, computeAccountBalances } from './reportUtils';
 import { CheckCircle2, AlertTriangle } from 'lucide-react';
@@ -43,12 +43,22 @@ export default function TrialBalanceReport({
     return computeAccountBalances(accounts, filteredEntries);
   }, [accounts, filteredEntries]);
 
-  // Build rows for each account
+  // Build rows for each account sorted hierarchically
   const trialBalanceRows = useMemo(() => {
     let totalDebitCents = 0;
     let totalCreditCents = 0;
 
-    const rows = accounts.map(acc => {
+    const sortedAccounts = sortAccountsHierarchically(accounts);
+
+    // Identify mother accounts that have sub-accounts
+    const parentIdsWithChildren = new Set<string>();
+    accounts.forEach(acc => {
+      if (acc.isSubAccount && acc.parentId) {
+        parentIdsWithChildren.add(acc.parentId);
+      }
+    });
+
+    const rows = sortedAccounts.map(acc => {
       const b = balances[acc.id] || { debits: 0, credits: 0, netDebit: 0, final: 0 };
       
       // Net debit: if > 0, sits in Debit column. If < 0, sits in Credit column.
@@ -68,7 +78,8 @@ export default function TrialBalanceReport({
         account: acc,
         debitCents,
         creditCents,
-        hasActivity: debitCents > 0 || creditCents > 0
+        hasActivity: debitCents > 0 || creditCents > 0,
+        isMotherWithChildren: parentIdsWithChildren.has(acc.id)
       };
     });
 
@@ -151,55 +162,97 @@ export default function TrialBalanceReport({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200">
-              {displayedRows.map(({ account, debitCents, creditCents }) => (
-                <tr key={account.id} className="hover:bg-slate-50 transition-colors">
-                  <td className="py-2 px-3 font-mono text-slate-500 font-semibold">
-                    <button
-                      onClick={() => onDrillDown?.(account.id)}
-                      className="hover:text-blue-600 hover:underline cursor-pointer"
-                      title={`Click to view transaction breakdown for ${account.name}`}
-                    >
-                      #{account.id}
-                    </button>
-                  </td>
-                  <td className="py-2 px-3 font-medium text-slate-900">
-                    <button
-                      onClick={() => onDrillDown?.(account.id)}
-                      className="hover:text-blue-600 hover:underline cursor-pointer text-left font-medium text-slate-900"
-                      title={`Click to view transaction breakdown for ${account.name}`}
-                    >
-                      {account.name}
-                    </button>
-                  </td>
-                  <td className="py-2 px-3 text-slate-600">
-                    <span className="px-1.5 py-0.5 rounded text-[10px] bg-slate-100 border border-slate-200 font-medium">
-                      {account.class}
-                    </span>
-                  </td>
-                  <td className="py-2 px-3 font-mono text-right text-slate-900 font-medium">
-                    {debitCents > 0 ? (
-                      <button
-                        onClick={() => onDrillDown?.(account.id)}
-                        className="hover:text-blue-600 hover:underline cursor-pointer transition-colors font-semibold"
-                        title={`Click to drill down into debit transactions for ${account.name}`}
-                      >
-                        {formatGAAPCurrency(debitCents, currencySymbol)}
-                      </button>
-                    ) : '—'}
-                  </td>
-                  <td className="py-2 px-3 font-mono text-right text-slate-900 font-medium">
-                    {creditCents > 0 ? (
-                      <button
-                        onClick={() => onDrillDown?.(account.id)}
-                        className="hover:text-blue-600 hover:underline cursor-pointer transition-colors font-semibold"
-                        title={`Click to drill down into credit transactions for ${account.name}`}
-                      >
-                        {formatGAAPCurrency(creditCents, currencySymbol)}
-                      </button>
-                    ) : '—'}
-                  </td>
-                </tr>
-              ))}
+              {displayedRows.map(({ account, debitCents, creditCents, isMotherWithChildren }) => {
+                const isSub = account.isSubAccount && account.parentId;
+                return (
+                  <tr
+                    key={account.id}
+                    className={`transition-colors ${
+                      isSub ? 'bg-blue-50/20 hover:bg-blue-50/40' : 'hover:bg-slate-50'
+                    }`}
+                  >
+                    {/* Account Code */}
+                    <td className="py-2 px-3 font-mono text-slate-500 font-semibold">
+                      <div className={`flex items-center ${isSub ? 'pl-5' : ''}`}>
+                        {isSub && (
+                          <span className="text-blue-600 font-mono text-sm leading-none mr-1.5 shrink-0">↳</span>
+                        )}
+                        <button
+                          onClick={() => onDrillDown?.(account.id)}
+                          className="hover:text-blue-600 hover:underline cursor-pointer"
+                          title={`Click to view transaction breakdown for ${account.name}`}
+                        >
+                          #{account.id}
+                        </button>
+                      </div>
+                    </td>
+
+                    {/* Account Name */}
+                    <td className="py-2 px-3">
+                      <div className={`flex items-center gap-2 flex-wrap ${isSub ? 'pl-5' : ''}`}>
+                        <button
+                          onClick={() => onDrillDown?.(account.id)}
+                          className={`hover:text-blue-600 hover:underline cursor-pointer text-left ${
+                            isSub
+                              ? 'font-medium text-slate-800'
+                              : isMotherWithChildren
+                              ? 'font-bold text-slate-900'
+                              : 'font-medium text-slate-900'
+                          }`}
+                          title={`Click to view transaction breakdown for ${account.name}`}
+                        >
+                          {account.name}
+                        </button>
+
+                        {isSub && (
+                          <span className="text-[10px] text-slate-400 font-mono font-normal">
+                            (Sub of #{account.parentId})
+                          </span>
+                        )}
+
+                        {isMotherWithChildren && (
+                          <span className="px-1.5 py-0.2 rounded text-[9px] font-mono bg-slate-100 text-slate-600 border border-slate-200">
+                            Mother Account
+                          </span>
+                        )}
+                      </div>
+                    </td>
+
+                    {/* Class */}
+                    <td className="py-2 px-3 text-slate-600">
+                      <span className="px-1.5 py-0.5 rounded text-[10px] bg-slate-100 border border-slate-200 font-medium">
+                        {account.class}
+                      </span>
+                    </td>
+
+                    {/* Debit Balance */}
+                    <td className="py-2 px-3 font-mono text-right text-slate-900 font-medium">
+                      {debitCents > 0 ? (
+                        <button
+                          onClick={() => onDrillDown?.(account.id)}
+                          className="hover:text-blue-600 hover:underline cursor-pointer transition-colors font-semibold"
+                          title={`Click to drill down into debit transactions for ${account.name}`}
+                        >
+                          {formatGAAPCurrency(debitCents, currencySymbol)}
+                        </button>
+                      ) : '—'}
+                    </td>
+
+                    {/* Credit Balance */}
+                    <td className="py-2 px-3 font-mono text-right text-slate-900 font-medium">
+                      {creditCents > 0 ? (
+                        <button
+                          onClick={() => onDrillDown?.(account.id)}
+                          className="hover:text-blue-600 hover:underline cursor-pointer transition-colors font-semibold"
+                          title={`Click to drill down into credit transactions for ${account.name}`}
+                        >
+                          {formatGAAPCurrency(creditCents, currencySymbol)}
+                        </button>
+                      ) : '—'}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
             <tfoot>
               <tr className="border-t-2 border-slate-900 font-bold text-xs uppercase bg-slate-100">

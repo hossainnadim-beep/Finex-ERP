@@ -7,6 +7,7 @@ import React, { useState, useEffect } from 'react';
 import { Account, JournalEntry, JournalLine, IssuedInvoice } from '../types';
 import { useAuth } from '../AuthContext';
 import { useCompany } from '../CompanyContext';
+import { resolveJournalLinesForSupabase } from '../utils/supabaseLedger';
 import { 
   FileText, 
   Plus, 
@@ -320,14 +321,7 @@ export default function InvoicesView({ accounts, onPostSuccess, currentUserEmail
       // 2. Post to Supabase if connected
       if (session?.mode === 'supabase' && supabase) {
         try {
-          const p_lines = journalLines.map(line => {
-            const matchedAcct = accounts.find(a => a.id === line.accountId);
-            return {
-              account_id: matchedAcct?.dbId || matchedAcct?.id || line.accountId,
-              debit_amount: line.debit,
-              credit_amount: line.credit
-            };
-          });
+          const p_lines = await resolveJournalLinesForSupabase(supabase, session, journalLines, accounts);
 
           console.log('Issuing Invoice via Supabase Balanced Entry:', {
             p_date: invoiceDate,

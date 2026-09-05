@@ -26,6 +26,14 @@ export const isSupabaseConfigured =
 export function clearStaleSupabaseSession() {
   if (typeof window === 'undefined') return;
   try {
+    // If there is an active password recovery flow in the URL, DO NOT clear the recovery session
+    if (
+      (window.location.hash && window.location.hash.includes('type=recovery')) ||
+      (window.location.search && window.location.search.includes('type=recovery'))
+    ) {
+      return;
+    }
+
     const keysToRemove: string[] = [];
     for (let i = 0; i < window.localStorage.length; i++) {
       const key = window.localStorage.key(i);
@@ -39,9 +47,10 @@ export function clearStaleSupabaseSession() {
       } catch (_) {}
     });
 
-    // Clean up any stale tokens or error descriptions from URL hash
+    // Clean up any stale tokens or error descriptions from URL hash (only when NOT in password recovery)
     if (
       window.location.hash &&
+      !window.location.hash.includes('type=recovery') &&
       (window.location.hash.includes('access_token') ||
         window.location.hash.includes('refresh_token') ||
         window.location.hash.includes('error_description') ||
